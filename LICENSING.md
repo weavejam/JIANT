@@ -21,6 +21,7 @@ Every file in this tree that carries an `SPDX-License-Identifier: GPL-3.0-only` 
 - the host tests: `tests/`
 - JIANT FM's interface art: `assets/ui-art/`, `assets/ui-shapes/` and the concept image `docs/jiant-fm-ui-concept.jpg`
   (by JIANT's author, under GPL-3.0-only like the rest of JIANT)
+- the JIANT FM plugin for tuttidaw: `web/plugin/` (below)
 
 One source file is a port and keeps the licence of its original: `firmware/src/fm6_core.c`
 (msfa, Apache-2.0). The firmware built with it is GPL-3.0-only as a whole. (The PHYS engine, ported
@@ -29,6 +30,22 @@ from DaisySP and Rings, MIT, was removed in FELUCCA TONIC.)
 You may use, study, change and share Felucca under the GPL. If you distribute Felucca, or
 firmware derived from it, you must also give your recipients its complete corresponding
 source under the same licence. That includes devices that ship with modified Felucca inside.
+
+## The JIANT FM plugin for tuttidaw (weavejam)
+
+`web/plugin/` (the headless renderer, the part stems, the fractional tempo, the plugin page and its protocol, the site's
+build) and the `JIANT_TUTTI` parts of the firmware it needs are by weavejam, in the fork
+<https://github.com/weavejam/JIANT>, under GPL-3.0-only like the rest of JIANT:
+
+Copyright (C) 2026 weavejam
+
+It is weavejam's plugin build of JIANT FM by Juan Ignacio Antonucci (Juan Jiant), <https://github.com/juanjiant-bit/JIANT>:
+JIANT FM (all of its sound and the instrument), built for the browser as `web/emu/` is; everything above and below
+applies to it. It is not affiliated with or endorsed by M-VAVE or Hügelton Instruments. Its site
+(`web/plugin/build.sh`) serves the licence texts, `LICENSING.md` and the README's credits with it (`/licenses/`),
+names its source (the commit it was built from) on `/credits.html`, and says that it is not affiliated with or endorsed
+by M-VAVE or Hügelton Instruments. tuttidaw only talks to it at arm's length (a sandboxed frame of another site,
+messages): tuttidaw is not part of it and does not become GPL by hosting it.
 
 ## Hügelton Instruments' own work
 

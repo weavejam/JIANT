@@ -95,6 +95,9 @@
 # Browser emulator (web/emu, when emcc is there): the firmware in WebAssembly (build/emu) boots, plays keys and MIDI,
 #                   draws, lights its LEDs, keeps a save across instances, plays a song bit for bit as the same file
 #                   built with cc (web/emu/native_check.c); the cost of 1 s of a heavy song against real time.
+# JIANT FM plugin for tuttidaw (web/plugin, with the emulator; weavejam): JIANT_TUTTI's build plays the emulator's song bit
+#                   for bit; renders deterministic, of exact lengths, fractional tempo on the grid, the six stems and the
+#                   mix, use B's channels, 48 kHz, state; the tutti-plugin/0 protocol against a fake host (plugin_test.mjs).
 # DRUM-X OCTAVES (tests/drumx_oct_test.c, 0.8.5): OCT 0 the kit as before (bit for bit); OCT +1 / +2 / +3 every other step /
 #                   once / x2 a step in time while held (0.9.17) (stopped and playing), -1 / -2 / -3 SHORT / GHOST / FLAM (length, level, tone,
 #                   the grace hit measured); real-time REC: the step's RATCH / ECHO x8 EVEN / TOUCH, the pass after the
@@ -408,6 +411,10 @@ else
     run "browser emulator: boot, keys, MIDI, screen, LEDs, PLAY, a save kept across instances, = native, cost" \
         node web/emu/emu_test.mjs build/emu/felucca.wasm "$OUT/emu_native.f32"
         run "stems from the browser build (web/emu/stems.js): a backup in, each part alone, the song once round, WAV + ZIP" node web/emu/stems_test.mjs build/emu/felucca.wasm
+    run "JIANT FM plugin: the firmware with JIANT_TUTTI and its preview site (web/plugin/build.sh)" \
+        env PLUGIN_CHANNEL=preview PLUGIN_ALLOW_DIRTY=1 sh web/plugin/build.sh
+    run "JIANT FM plugin: renders, stems, fractional tempo, state, the tutti-plugin/0 protocol against a fake host" \
+        node web/plugin/plugin_test.mjs build/plugin-wasm/felucca.wasm build/emu/felucca.wasm
 fi
 
 [ $fail -eq 0 ] && echo "ALL HOST TESTS PASSED" || { echo "HOST TESTS FAILED"; exit 1; }
