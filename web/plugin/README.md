@@ -217,6 +217,7 @@ that snapshot (an edit meanwhile is the next revision), so a revision never stan
     tall one) is the larger in the frame, the render controls and a credits link in one line under it.
   - `resize` is sent once connected, as a hint: 1280 x 800, the wide layout's own size.
   - Opened by itself: the same.
+  - `screenshots/`: the frame at 1280 x 820, 1600 x 900, 900 x 700, 480 x 360 and 390 x 780 (Chromium, in the dev host).
 - `/credits.html`: who made what (JIANT FM, Felucca, SLOOP, X0X and the rest of JIANT's credits), the licences, the
   source of the build, the non-affiliation. The page's footer links it and shows the source URL as text too.
 
