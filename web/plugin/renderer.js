@@ -215,6 +215,8 @@ export async function render(module, state, req, sink, opts = {}) {
   const stems = new Map();                             // part -> its stem's instance (jiant_plugin.c tutti_stem_render)
   for (const p of parts) stems.set(p, await device(module, state, plan.bpm));
   if (plan.events) {
+    main.tutti_input(plan.stop);                       // the host's note lifetimes: no latch holds a note past its off,
+                                                       // what is held is let go at toBeat (jiant_plugin.c tutti_input)
     for (const e of plan.events)
       if (!main.tutti_event(e.frame, e.status, e.d1, e.d2)) throw new RenderError("too-large", "too many MIDI events");
   } else main.tutti_start(plan.stop);                 // use A: the song from frame 0, stopped at toBeat (the tail rings out)

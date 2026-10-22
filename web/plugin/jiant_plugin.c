@@ -126,6 +126,8 @@ static void tutti_restore(void)
 static float tt_l[TT_MAXB * CTL], tt_r[TT_MAXB * CTL];
 static int32_t tt_cap[NPART][TT_MAXB][TT_NCAP][CTL];   /* each part's share of each block of a call (fx.c tutti_part) */
 static tutti_blk_t tt_blk[TT_MAXB];                     /* .. and the master's (fx.c tutti_b) */
+static uint8_t tt_meter;                                /* the live page's meters (tutti_meters, below) */
+static void tt_meter_block(uint32_t n);
 static uint32_t tt_capture, tt_nb, tt_cur, tt_frames, tt_headless;
 
 /* power on as web_boot, for the host: the session's seed pinned, the state's music in any case, the host's clock (the
@@ -175,6 +177,17 @@ EXPORT void tutti_start(uint32_t stop)
     tt_stop = stop;
 }
 
+/* use B (the host's MIDI, the sequencer never started): the host's notes last as it says, whatever latches in the state
+ * (core.h tutti_unlatch: ARP 2's HOLD as OFF, the setting unchanged), and with the block nearest to frame `stop`
+ * (toBeat: the offs and CC64 0 there) what is still held or latched is let go (seq.c tutti_unhold), the tail only
+ * rings out. The live page never calls it */
+static uint32_t tt_unhold = ~0u;
+EXPORT void tutti_input(uint32_t stop)
+{
+    tutti_unlatch = 1;
+    tt_unhold = stop;
+}
+
 /* audio.c audio_block, before each block's mix: the host's MIDI due, the transport */
 static void tutti_block_begin(void)
 {
@@ -201,13 +214,18 @@ static void tutti_block_begin(void)
         transport_req = 2;                            /* (seq.c events_block: seq_stop, before the steps) */
         tt_stop = ~0u;
     }
+    if (tt_unhold != ~0u && f0 + CTL / 2u > tt_unhold) {
+        tutti_let_go = 1;                             /* (seq.c events_block: after this block's MIDI, its offs) */
+        tt_unhold = ~0u;
+    }
 }
 
 /* fx.c mix_block, after each block (or its silence): the parts' shares and the master's into the call's capture */
 static void tutti_block(uint32_t n)
 {
     uint32_t p;
-    (void)n;
+    if (tt_meter)
+        tt_meter_block(n);
     if (!tt_capture)
         return;
     for (p = 0; p < NPART; p++)
@@ -236,7 +254,7 @@ EXPORT uint32_t tutti_render(uint32_t nhalves, uint32_t capture)
         tt_r[k] = ring[i + 1];
     }
     tt_capture = 0;
-    tutti_on = 0;
+    tutti_on = tt_meter;
     return n;
 }
 EXPORT float *tutti_out_l(void) { return tt_l; }
@@ -257,6 +275,99 @@ EXPORT uint32_t tutti_latency(void) { return 0; }
 EXPORT uint32_t tutti_seq_idx(uint32_t t) { return trk[t % NTRK].seq_idx; }
 EXPORT uint32_t tutti_seq_pos(uint32_t t) { return trk[t % NTRK].seq_pos; }
 EXPORT uint32_t tutti_bar_n(void) { return bar_n; }
+
+/* ------------------------------------------------------- the page's view --- */
+/* The plugin page's parts panel (tutti.js, the wide layout): what the device plays, read only, nothing in it changes
+ * the device. Meters: on the live device (not headless), each part's share of every block kept (fx.c tutti_part, as for
+ * a render: the mix bit for bit the same) and its peak taken here, dry and SLICER bus (its sends left out), until
+ * tutti_view reads it */
+static uint32_t tt_peak[NPART];
+EXPORT void tutti_meters(uint32_t on)
+{
+    tt_meter = (uint8_t)(on && !tt_headless);
+    tutti_on = tt_meter;
+}
+static void tt_meter_block(uint32_t n)
+{
+    uint32_t p, k, i;
+    for (p = 0; p < NPART; p++)
+        for (k = TT_L; k <= TT_SR; k++)
+            for (i = 0; i < n; i++) {
+                int32_t x = tutti_pc[p][k][i];
+                uint32_t a = (uint32_t)(x < 0 ? -x : x);
+                if (a > tt_peak[p])
+                    tt_peak[p] = a;
+            }
+}
+/* the view, TV_SIZE bytes (tutti.js reads it by these offsets): the song, its rows, then each part's TV_PART bytes */
+#define TV_HEAD 48u
+#define TV_PART 32u
+#define TV_SIZE (TV_HEAD + NPART * TV_PART)
+static uint8_t tt_view[TV_SIZE];
+EXPORT uint32_t tutti_view_size(void) { return TV_SIZE; }
+EXPORT uint8_t *tutti_view(void)
+{
+    uint8_t *v = tt_view;
+    uint32_t p, s, k;
+    memset(tt_view, 0, sizeof tt_view);
+    v[0] = song.playing;
+    v[1] = song.sel;
+    v[2] = trk_live;
+    v[3] = live.mode;
+    v[4] = chain.running;
+    v[5] = chain.row;
+    v[6] = chain_config.count < CHAIN_ROWS ? chain_config.count : CHAIN_ROWS;
+    v[7] = (uint8_t)(live.cur + 1);                    /* the section playing + 1 (0: none) */
+    v[8] = chain.remaining;
+    v[9] = (uint8_t)beat_n;
+    v[10] = (uint8_t)bar_n;
+    v[11] = (uint8_t)(bar_n >> 8);
+    v[12] = (uint8_t)HEAD_BPM;
+    v[13] = (uint8_t)(HEAD_BPM >> 8);
+    v[14] = chain.armed;
+    v[15] = (uint8_t)(live.req + 1);                   /* a section asked for + 1 (0: none) */
+    for (k = 0; k < CHAIN_ROWS; k++) {                 /* the rows: section, bars */
+        v[16u + 2u * k] = chain_config.row[k].slot;
+        v[17u + 2u * k] = chain_config.row[k].bars;
+    }
+    for (p = 0; p < NPART; p++) {
+        const track_t *t = &trk[p];
+        uint8_t *q = v + TV_HEAD + p * TV_PART;
+        uint32_t len = t->p[P_SLEN] > 0 && t->p[P_SLEN] <= NSTEP ? (uint32_t)t->p[P_SLEN] : 1u, vo = 0;
+        q[0] = (uint8_t)eng_idx(t->engine);
+        q[1] = (uint8_t)(t->p[P_MUTE] != 0);
+        q[2] = (uint8_t)len;
+        q[3] = (uint8_t)(t->seq_idx % len);
+        q[4] = (uint8_t)clamp(t->p[P_LEVEL], 0, 127);
+        q[5] = (uint8_t)clamp(t->p[P_AMODE], 0, 255);
+        q[6] = (uint8_t)(t->p[P_AHOLD] != 0);
+        for (k = 0; k < NVOICE; k++)
+            vo += t->v[k].active != 0;
+        q[7] = (uint8_t)vo;
+        for (s = 0; s < NSTEP; s++) {                  /* the steps: one that strikes, one that ties */
+            const step_t *st = &t->step[s];
+            if ((st->n && st->time == ST_NOTE) || st->hit)
+                q[8u + s / 8u] |= (uint8_t)(1u << (s % 8u));
+            else if (st->n && st->time == ST_TIE)
+                q[16u + s / 8u] |= (uint8_t)(1u << (s % 8u));
+        }
+        q[24] = (uint8_t)tt_peak[p];
+        q[25] = (uint8_t)(tt_peak[p] >> 8);
+        q[26] = (uint8_t)(tt_peak[p] >> 16);
+        q[27] = (uint8_t)(tt_peak[p] >> 24);
+        q[28] = t->user;
+        q[29] = t->preset;
+        tt_peak[p] = 0;
+    }
+    return tt_view;
+}
+/* engine e's name, its factory preset k's ("" none) */
+EXPORT const char *tutti_engine_name(uint32_t e) { return ENGINES[eng_idx(e)]->name; }
+EXPORT const char *tutti_preset_name(uint32_t e, uint32_t k)
+{
+    const engine_t *g = ENGINES[eng_idx(e)];
+    return g->presets && k < g->npresets && g->presets[k].name ? g->presets[k].name : "";
+}
 
 /* ------------------------------------------------------------ a stem --- */
 /* In an instance of its own (booted with the same state and tempo, headless; nothing else runs in it): one part's
@@ -462,6 +573,22 @@ EXPORT void tutti_test_clear(uint32_t t)
 {
     memset(trk[t % NTRK].step, 0, sizeof trk[0].step);
     ui.force = 1;
+}
+/* .. track t's ARP MODE (0 OFF, 1 UP, ..) and ARP 2's HOLD (0 / 1) set (each < 0: left as it is); -> mode | hold << 8 */
+EXPORT uint32_t tutti_test_arp(uint32_t t, int32_t mode, int32_t hold)
+{
+    track_t *k = &trk[t % NTRK];
+    if (mode >= 0)
+        k->p[P_AMODE] = (int16_t)mode;
+    if (hold >= 0)
+        k->p[P_AHOLD] = (int16_t)(hold != 0);
+    return (uint32_t)k->p[P_AMODE] | (uint32_t)k->p[P_AHOLD] << 8;
+}
+/* .. the arp's held notes and keys down on track t (seq.c arp_add: nheld | arp_phys << 8), its sounding note << 16 */
+EXPORT uint32_t tutti_test_held(uint32_t t)
+{
+    const track_t *k = &trk[t % NTRK];
+    return (uint32_t)k->nheld | (uint32_t)(k->arp_phys & 0xFFu) << 8 | (uint32_t)k->arp_note << 16;
 }
 /* .. MENU > TRACKS 6 (all six tracks play; the setting, written with the next snapshot) */
 EXPORT void tutti_test_six(void)

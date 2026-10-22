@@ -50,6 +50,7 @@ img-src 'self' data:; frame-src 'none'; form-action 'none'; object-src 'none'; b
 | `protocol.js` | the session: handshake, messages, state machine, credited chunks |
 | `engine.js` | state revisions, renders of a revision, the live device |
 | `tutti.js`, `worklet-tutti.js`, `render-worker.js` | the page: the emulator's page and worklet with the protocol, renders in a Worker |
+| `panel.js` | the page's layout at any frame size, the parts panel |
 | `site.mjs`, `build.sh` | the static site, the manifest |
 | `dev/` | a stand-in host and a server for development |
 | `plugin_test.mjs` | the tests (Node) |
@@ -138,7 +139,13 @@ emulator preprocess to the same code as without it (checked with `emcc -E` on `f
   moved that way, it still comes before the next note of the same pitch on the same channel, never cutting it. A
   channel whose sustain pedal (CC64) is down at `toBeat` gets CC64 0 there, after the offs (a pedal-up later is not in
   the range): its notes are let go at `toBeat` as without the pedal, their release and the effects ring out in the tail
-  (no sound-off).
+  (no sound-off). A note lasts as the host says, whatever latches in the state: ARP 2's HOLD plays as OFF (each off
+  takes its note out of the arp), and with `toBeat`'s block, after its offs, what is still held or latched is let go
+  (the arp's notes, its sounding note ended as an off ends it): a runtime override (`tutti_input`, core.h
+  `tutti_unlatch`), HOLD itself stays as it was in the state, the live preview and the emulator latch as always. KBD
+  HOLD (LATCH, ARP OFF) holds the keys' notes only, never MIDI's; the kit's octave ratchets end with their note's off;
+  FX LATCH latches what the keys turn on (runtime, not in the state); ARP TRNS moves the sequence, which does not run
+  (`plugin_test.mjs`: with HOLD ON, ARP UP or OFF, a render is HOLD OFF's bit for bit).
 
 ## Sample rates
 
@@ -195,6 +202,22 @@ that snapshot (an edit meanwhile is the next revision), so a revision never stan
   of 1 s, protocol 6's budget).
 - Opened by itself (or not connected within 4 s): the browser emulator, its saves in this browser, a seed of its own,
   with a note; a `connect` after that is refused (reload the frame to connect).
+- **Any frame size, no scrollbars** (`panel.js`). tuttidaw opens the frame wide on a desktop and lets it be resized to
+  anything from 480 x 360; the page fills it, whatever its size. The device is sized in layout units (its drawing and its
+  hit areas are % of its box, `web/emu/index.html`), so it stays crisp and every control is where it is drawn.
+  - **Wide** (at least 900 px wide and 1.3 times as wide as high): the device's tall drawing at the frame's full height on
+    the left; on the right the render controls and **the parts panel**: the transport (playing, the tempo, bar and beat,
+    PLAY's SONG / LOOP, the section playing and the one asked for), the six parts (engine and sound, MUTE / ASLEEP / ARP /
+    HOLD, a level meter, the pattern's steps, struck and tied, with the playhead, the selected part outlined) and the
+    song's rows (section and bars, the one playing lit); then the keys, the credits (what does not fit goes, the parts
+    stay). It only shows what the device plays (`jiant_plugin.c tutti_view`, with the frames from the worklet; the
+    meters: each part's share of the mix as a render keeps it, `tutti_meters`, the sound bit for bit the same); nothing
+    in it changes the device.
+  - **Otherwise** (a phone sheet, a small window): the device alone, in whichever drawing (the FM-1's wide one or the
+    tall one) is the larger in the frame, the render controls and a credits link in one line under it.
+  - `resize` is sent once connected, as a hint: 1280 x 800, the wide layout's own size.
+  - Opened by itself: the same.
+  - `screenshots/`: the frame at 1280 x 820, 1600 x 900, 900 x 700, 480 x 360 and 390 x 780 (Chromium, in the dev host).
 - `/credits.html`: who made what (JIANT FM, Felucca, SLOOP, X0X and the rest of JIANT's credits), the licences, the
   source of the build, the non-affiliation. The page's footer links it and shows the source URL as text too.
 
