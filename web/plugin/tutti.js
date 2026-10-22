@@ -7,10 +7,13 @@
 //     tuttidaw" sends `commit`; renders run in a Worker (render-worker.js); mode 'render': headless, nothing else runs.
 //   - opened by itself (or not connected within a few seconds): the emulator as on its own page, a note that it is a
 //     tuttidaw plugin.
+//   Either way the page fills the frame at any size, the device scaled to fit, with the parts panel beside it in a wide
+//   frame (panel.js).
 import { PluginSession, embedderAllowed } from "./protocol.js";
 import { JiantEngine, PreviewTempo } from "./engine.js";
 import { RenderError } from "./renderer.js";
 import { BUILD, EMBEDDERS } from "./build-info.js";
+import { frameLayout, drawingFor, PREFERRED } from "./panel.js";
 
 const embedded = window.parent !== window;
 const AUTOSAVE = [0xE5000, 0xE7000];                   // project.c OBJ_AUTOSAVE's two sectors: the music, not the rest
@@ -25,6 +28,8 @@ const host = window.feluccaHost = {
   wasm: "felucca.wasm",
   midi: !embedded,                                     // (in tuttidaw's frame: no Web MIDI, the manifest asks none)
   attach: (a) => { api = a; ui(); },
+  layout: () => drawingFor(innerWidth, innerHeight),  // (the device's drawing for this frame: panel.js)
+  started: (n, c) => { node = n; ac = c; view(n); },  // (live.load adds the host's part)
   load: () => (standalone ? { hosted: false } : { hosted: true, songMode: live.state.songMode }),   // (the worklet's load)
 };
 
@@ -51,6 +56,7 @@ function ui() {
     <p class="note" id="tt-note"></p>`;
   document.querySelector("main").insertBefore(bar, document.querySelector(".keys"));
   const foot = document.querySelector("footer");
+  page = frameLayout({ bar, getApi: () => api });
   const credit = document.createElement("p");
   credit.innerHTML = `weavejam's plugin build of JIANT FM (by Juan Ignacio Antonucci, Juan Jiant) for
     <a href="https://tuttidaw.com">tuttidaw</a> (GPL-3.0) · <a href="../credits.html" target="_blank" rel="noopener">credits, licences, source</a><br>
@@ -68,7 +74,17 @@ function ui() {
     $("go").disabled = true;
   }
 }
-const note = (t) => { if ($("tt-note")) $("tt-note").textContent = t; };
+const note = (t) => { if ($("tt-note")) { $("tt-note").textContent = t; $("tt-note").title = t; } };
+let page = null;
+// the parts panel's view from the worklet (worklet-tutti.js tutti-view) while the device is on
+function view(n) {
+  const frames = n.port.onmessage;
+  n.port.onmessage = (e) => {
+    if (e.data.type === "tutti-view") { if (page) page.panel.show(e.data.view, e.data.names); }
+    else frames(e);
+  };
+  n.port.postMessage({ type: "tutti-view", on: true });
+}
 
 function becomeStandalone() {
   standalone = true;
@@ -112,6 +128,7 @@ const live = {
     host.started = (n, c) => {
       node = n;
       ac = c;
+      view(n);
       liveOn = true;
       tempo.reset();
       tempo.at(0);
@@ -243,6 +260,7 @@ engine.init = async (args) => {
   clearTimeout(alone);
   if (args.mode === "render") {                        // headless: no device, no sound, only renders
     note("Rendering for tuttidaw (headless).");
+    if (page) page.panel.idle("Rendering for tuttidaw (headless): no device here.");
     if ($("go")) $("go").disabled = true;
   } else {
     $("tt-connected").hidden = false;
@@ -252,16 +270,14 @@ engine.init = async (args) => {
 
 let alone = 0;
 if (embedded) {
-  // the host lays the frame out: the size this page wants, once connected and whenever it changes
-  const size = () => session.resize(Math.min(1600, document.documentElement.scrollWidth), Math.min(1200, document.documentElement.scrollHeight));
+  // the host lays the frame out: this page fits any size (panel.js), the size it asks is a hint, the wide layout's own
   window.addEventListener("message", (e) => {
     if (session.onWindowMessage({ data: e.data, origin: e.origin, isParent: e.source === window.parent, ports: e.ports })) {
       note("Connected to tuttidaw.");
-      size();
+      session.resize(PREFERRED.width, PREFERRED.height);
     }
   });
   session.hello();
   alone = setTimeout(() => { if (!session.port) becomeStandalone(); }, 4000);   // (not tuttidaw's frame)
-  new ResizeObserver(size).observe(document.body);
 }
 window.addEventListener("pagehide", () => session.close());

@@ -13,7 +13,10 @@
 //                   SEEK_BLOCKS blocks per render quantum (jiant_plugin.c tutti_seek_run), silent until it is there
 //   tutti-snapshot  {id}: the music written as the autosave, the state back {type: tutti-snapshot, id, ok, state, sig}
 //                   (state.js: the storage sectors, the PLAY mode)
-// and out: {type: tutti-sig, sig} when the music (project.c autosave_sig) or the PLAY mode changed.
+//   tutti-view      {on}: the parts panel's view (jiant_plugin.c tutti_view: the song, each part's steps and meter)
+//                   with every frame, or no more
+// and out: {type: tutti-sig, sig} when the music (project.c autosave_sig) or the PLAY mode changed; {type: tutti-view,
+// view, names} with the frames while the view is on (names: each part's engine and factory preset).
 import { storeSectors, restoreSectors } from "../emu/worklet.js";
 
 const Base = globalThis.FeluccaProcessor;
@@ -31,6 +34,7 @@ class JiantTutti extends Base {
     this.at = null;                                    // playing: {gen, frame, pos} (pos at that frame)
     this.seeking = null;                               // a seek on its way: {gen, frame, pos} (pos at that frame)
     this.sentSig = null;
+    this.view = false;
   }
 
   async onMessage(m) {
@@ -43,6 +47,11 @@ class JiantTutti extends Base {
     const ex = this.ex;
     if (!ex) return;
     if (m.type === "tutti-play") return this.schedule(m);
+    if (m.type === "tutti-view") {
+      this.view = !!m.on;
+      ex.tutti_meters(this.view ? 1 : 0);
+      return;
+    }
     if (m.type === "tutti-snapshot") {
       const ok = ex.tutti_snapshot();
       const sectors = storeSectors(new Uint8Array(ex.memory.buffer, ex.web_nor(), ex.web_nor_size()));
@@ -71,6 +80,7 @@ class JiantTutti extends Base {
         ex.web_boot();
       }
       if (this.bpm) ex.tutti_tempo(this.bpm);
+      ex.tutti_meters(this.view ? 1 : 0);
       this.ex = ex;
       this.sentWrites = ex.web_flash_writes_count();
       this.sentDraws = -1;
@@ -121,6 +131,16 @@ class JiantTutti extends Base {
 
   publish() {
     super.publish();
+    if (this.view) {
+      const ex = this.ex, view = new Uint8Array(ex.memory.buffer, ex.tutti_view(), ex.tutti_view_size()).slice();
+      const str = (p) => { const m = new Uint8Array(ex.memory.buffer); let s = ""; while (m[p] && s.length < 32) s += String.fromCharCode(m[p++]); return s; };
+      const names = [];
+      for (let p = 0; p < ex.tutti_parts(); p++) {
+        const q = 48 + p * 32;                         // (jiant_plugin.c TV_HEAD, TV_PART)
+        names.push([str(ex.tutti_engine_name(view[q])), view[q + 28] ? "" : str(ex.tutti_preset_name(view[q], view[q + 29]))]);
+      }
+      this.port.postMessage({ type: "tutti-view", view, names }, [view.buffer]);
+    }
     const sig = sigOf(this.ex);
     if (sig !== this.sentSig) {
       this.sentSig = sig;

@@ -984,5 +984,48 @@ function restoreInto(ex, sectors) {
         asked3 === 1 && gc.stateRevision === 3 && stateEquals(gc.state, packState(st(9))));
 }
 
+// ---- the page's parts panel (panel.js, jiant_plugin.c tutti_view): the meters leave the live device's sound as it was,
+// the view is what it plays; the layout per frame size
+{
+  const live = async (meters) => {
+    const { exports: ex } = await WebAssembly.instantiate(mod, {});
+    ex._initialize();
+    ex.web_nor_erase();
+    ex.tutti_boot(0);
+    ex.tutti_tempo(120);
+    ex.web_render(4410);
+    ex.web_test_heavy();
+    ex.tutti_meters(meters);
+    ex.tutti_seek(1, 0);
+    while (ex.tutti_seek_run(1024, 0));
+    const l = new Float32Array(44100), r = new Float32Array(44100);
+    for (let k = 0; k < 44100; k += 4410) {
+      ex.web_render(4410);
+      l.set(new Float32Array(ex.memory.buffer, ex.web_out_l(), 4410), k);
+      r.set(new Float32Array(ex.memory.buffer, ex.web_out_r(), 4410), k);
+    }
+    const v = new Uint8Array(ex.memory.buffer, ex.tutti_view(), ex.tutti_view_size()).slice();
+    const again = new Uint8Array(ex.memory.buffer, ex.tutti_view(), ex.tutti_view_size()).slice();
+    const str = (p) => { const m = new Uint8Array(ex.memory.buffer); let s = ""; while (m[p]) s += String.fromCharCode(m[p++]); return s; };
+    return { l, r, v, again, str, ex };
+  };
+  const off = await live(0), on = await live(1);
+  check("parts panel: the live device with its meters on sounds bit for bit as without", same(off.l, on.l) && same(off.r, on.r));
+  const v = on.v, part = (p, k) => v[48 + p * 32 + k], peakOf = (b, p) => new DataView(b.buffer, 48 + p * 32 + 24, 4).getUint32(0, true);
+  const steps = (p) => { let n = 0; for (let s = 0; s < 64; s++) n += (part(p, 8 + (s >> 3)) >> (s & 7)) & 1; return n; };
+  const names = [0, 1, 2, 3].map((p) => on.str(on.ex.tutti_engine_name(part(p, 0))));
+  check(`parts panel: the view: playing ${v[0]}, ${v[12] | v[13] << 8} BPM, T1..T4 ${names.join(" ")}, steps ${[0, 1, 2, 3, 4].map(steps).join(" ")}, ` +
+        `peaks ${[0, 1, 2, 3, 4].map((p) => peakOf(v, p)).join(" ")}, read again ${[0, 2, 3].map((p) => peakOf(on.again, p)).join(" ")}`,
+        v[0] === 1 && (v[12] | v[13] << 8) === 120 && names[0] === "FM6" && names[2] === "VOICE" && names[3] === "DRUM" &&
+        steps(0) === 16 && steps(3) === 16 && steps(4) === 0 && part(0, 2) === 16 && part(0, 3) < 16 &&
+        peakOf(v, 0) > 0 && peakOf(v, 2) > 0 && peakOf(v, 3) > 0 && peakOf(v, 4) === 0 &&
+        [0, 2, 3].every((p) => peakOf(on.again, p) === 0) && [0, 1, 2, 3, 4, 5].every((p) => peakOf(off.v, p) === 0));
+  const { isWide, drawingFor, PREFERRED } = await import("./panel.js");
+  const lay = (w, h) => (isWide(w, h) ? "wide+tall" : `compact+${drawingFor(w, h)}`);
+  const got = [[1280, 820], [1600, 900], [900, 700], [480, 360], [390, 780], [PREFERRED.width, PREFERRED.height]].map(([w, h]) => `${w}x${h} ${lay(w, h)}`);
+  check(`page layout per frame: ${got.join(", ")}`,
+        got.join() === "1280x820 wide+tall,1600x900 wide+tall,900x700 compact+wide,480x360 compact+wide,390x780 compact+tall,1280x800 wide+tall");
+}
+
 console.log(fails ? `plugin: ${fails} FAILED` : "plugin: all ok");
 process.exit(fails ? 1 : 0);

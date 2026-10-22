@@ -50,6 +50,7 @@ img-src 'self' data:; frame-src 'none'; form-action 'none'; object-src 'none'; b
 | `protocol.js` | the session: handshake, messages, state machine, credited chunks |
 | `engine.js` | state revisions, renders of a revision, the live device |
 | `tutti.js`, `worklet-tutti.js`, `render-worker.js` | the page: the emulator's page and worklet with the protocol, renders in a Worker |
+| `panel.js` | the page's layout at any frame size, the parts panel |
 | `site.mjs`, `build.sh` | the static site, the manifest |
 | `dev/` | a stand-in host and a server for development |
 | `plugin_test.mjs` | the tests (Node) |
@@ -195,6 +196,21 @@ that snapshot (an edit meanwhile is the next revision), so a revision never stan
   of 1 s, protocol 6's budget).
 - Opened by itself (or not connected within 4 s): the browser emulator, its saves in this browser, a seed of its own,
   with a note; a `connect` after that is refused (reload the frame to connect).
+- **Any frame size, no scrollbars** (`panel.js`). tuttidaw opens the frame wide on a desktop and lets it be resized to
+  anything from 480 x 360; the page fills it, whatever its size. The device is sized in layout units (its drawing and its
+  hit areas are % of its box, `web/emu/index.html`), so it stays crisp and every control is where it is drawn.
+  - **Wide** (at least 900 px wide and 1.3 times as wide as high): the device's tall drawing at the frame's full height on
+    the left; on the right the render controls and **the parts panel**: the transport (playing, the tempo, bar and beat,
+    PLAY's SONG / LOOP, the section playing and the one asked for), the six parts (engine and sound, MUTE / ASLEEP / ARP /
+    HOLD, a level meter, the pattern's steps, struck and tied, with the playhead, the selected part outlined) and the
+    song's rows (section and bars, the one playing lit); then the keys, the credits (what does not fit goes, the parts
+    stay). It only shows what the device plays (`jiant_plugin.c tutti_view`, with the frames from the worklet; the
+    meters: each part's share of the mix as a render keeps it, `tutti_meters`, the sound bit for bit the same); nothing
+    in it changes the device.
+  - **Otherwise** (a phone sheet, a small window): the device alone, in whichever drawing (the FM-1's wide one or the
+    tall one) is the larger in the frame, the render controls and a credits link in one line under it.
+  - `resize` is sent once connected, as a hint: 1280 x 800, the wide layout's own size.
+  - Opened by itself: the same.
 - `/credits.html`: who made what (JIANT FM, Felucca, SLOOP, X0X and the rest of JIANT's credits), the licences, the
   source of the build, the non-affiliation. The page's footer links it and shows the source URL as text too.
 
