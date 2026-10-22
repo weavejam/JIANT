@@ -668,8 +668,9 @@ const collect = (h, renderId) => {                    // the chunks of a render,
   const pw = h.got.filter((m) => m.type === "render-progress" && m.renderId === "w2");
   check(`progress: render-progress messages, fraction 0..1, the last 1 (${pw.length} for w2)`, h.got.some((m) => m.type === "render-progress" && m.fraction >= 0 && m.fraction <= 1) &&
         pw.length > 0 && pw.at(-1).fraction === 1 && pw.every((m, i) => !i || m.fraction >= pw[i - 1].fraction));
-  // credits accumulate up to protocol 6's most chunks of a render (8 outputs x 600 chunks of 1 s), not without end
-  h.send({ type: "render", id: "c3", ...req({ renderId: "c3", stateRevision: rev, context: ctxOf(123.45), toBeat: 40 }) });
+  // credits accumulate up to protocol 6's most chunks of a render (8 outputs x 600 chunks of 1 s), not without end.
+  // ~583 s long so the grants cannot let it finish before the read below (a fast runner did with 19 s)
+  h.send({ type: "render", id: "c3", ...req({ renderId: "c3", stateRevision: rev, context: ctxOf(123.45), toBeat: 1200 }) });
   await sleep(300);
   for (let k = 0; k < 5; k++) h.send({ type: "render-credit", renderId: "c3", chunks: 1e6 });
   await sleep(300);
