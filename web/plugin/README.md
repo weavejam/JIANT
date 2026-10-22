@@ -26,8 +26,8 @@ pages may embed the build, and `site.mjs` writes that one list into both the pag
 
 | Channel | Embedders | Out |
 | --- | --- | --- |
-| `production` | exactly `https://tuttidaw.com`, `https://www.tuttidaw.com` | `build/plugin-site/` |
-| `preview` | those and `http://localhost:<any port>` (tuttidaw's dev server, `dev/`) | `build/plugin-site-preview/` |
+| `production` | exactly `https://tuttidaw.com`, `https://www.tuttidaw.com` | `build/plugin-site/`, served at `https://jiant.plugins.tooljams.com` |
+| `preview` | those and `http://localhost:<any port>` (tuttidaw's dev server, `dev/`) | `build/plugin-site-preview/`, served at `https://jiant-preview.plugins.tooljams.com` |
 
 `.github/workflows/plugin-site.yml` builds both from one wasm and keeps the production site as an artifact on a push to
 main (the only event a deployment may come from), the preview site on a pull request. A second job runs the host tests
@@ -123,7 +123,10 @@ emulator preprocess to the same code as without it (checked with `emcc -E` on `f
 - **Tempo range.** JIANT plays 40 .. 240 BPM (its own BPM's range, fractional within it). A render whose tempo at
   `fromBeat` is outside it gets `unsupported`; nothing is rendered at a different tempo.
 - **No seek.** `capabilities.seek` is `false`: every render runs from beat 0, and `render-progress` goes over the
-  pre-roll from beat 0 and the range together.
+  pre-roll from beat 0 and the range together. The pre-roll has a budget as the result has (protocol 6: at most 600 s):
+  `fromBeat` at most 610 s (600 s and the longest tail, 10 s) from beat 0 at the render's tempo, else `too-large`; so a
+  render's work is at most twice the longest result. A range whose frames the firmware's counters (32 bits) cannot
+  hold is a `bad-request`.
 - **Use A / use B.** `input: null`: JIANT's own sequencer plays (use A), from beat 0, as PLAY starts it: the song's rows
   when the song layer's PLAY is SONG (the state keeps it), else the music; it stops at `toBeat` (the nearest block): its
   notes are released there and the tail only rings out. With `input` (use B) JIANT's sequencer never runs (protocol 7b:
@@ -131,8 +134,11 @@ emulator preprocess to the same code as without it (checked with `emcc -E` on `f
   cannot start it either) and the notes, CC and pitch bend go in as USB-MIDI would deliver them, MIDI IN's ROUTE as CH
   (whatever the state's): MIDI channels 0..5 ("1..6" on the device) play T1..T6 (the manifest's `midiChannels`; T5 and
   T6 sound with MENU > TRACKS 6). Notes are released at `min(end, toBeat)`; a note's off comes at least a block (32
-  frames) after its on, so a note of length 0 (or less) still sounds and is let go, never off before on; moved that
-  way, it still comes before the next note of the same pitch on the same channel, never cutting it.
+  frames) after its on, so a note of length 0 (or less: taken as 0) still sounds and is let go, never off before on;
+  moved that way, it still comes before the next note of the same pitch on the same channel, never cutting it. A
+  channel whose sustain pedal (CC64) is down at `toBeat` gets CC64 0 there, after the offs (a pedal-up later is not in
+  the range): its notes are let go at `toBeat` as without the pedal, their release and the effects ring out in the tail
+  (no sound-off).
 
 ## Sample rates
 
@@ -161,6 +167,8 @@ emulator's own page or the editor, or rebuild the music here.
 Revisions: 1 is the state `init` gave (or the factory state). An edit on the live device (its music, the PLAY mode, a
 saved preset or project, a setting) starts the next revision, `state-changed` follows once it has been still for 600 ms
 (at most every 2 s while it keeps changing). Renders take the state of the revision they ask for (the last 8 are kept).
+A revision's bytes are made once: a `get-state` or a render that asks for it while its snapshot is being made waits for
+that snapshot (an edit meanwhile is the next revision), so a revision never stands for two different states.
 
 ## The page
 
@@ -175,9 +183,16 @@ saved preset or project, a setting) starts the next revision, `state-changed` fo
 - **Tempo while hosted.** The host's tempo is a runtime value: the screen shows it, but the song's own BPM (in the
   state) stays as it was, so tuttidaw's tempo never changes the state or starts a new revision. The BPM knob and TAP
   still change the song's own BPM (saved with the state), which plays no part while hosted.
+- **Clock while hosted.** The live preview and every render play on the host's clock (the internal one at its tempo),
+  also with MENU > CLOCK USB or TRS in the state: a runtime override (core.h `CLOCK_EXT`), the setting itself stays
+  the user's (`get-state` gives it back as it was, the emulator opened by itself follows it).
 - **Sessions.** A request keeps the session it came in with: what it sends after the session has ended is dropped,
   never sent into the next session, and a late `init` of an ended session leaves the next one uninitialised. A render
-  still running in the Worker when the next session renders is stopped with its Worker.
+  still running in the Worker when the next session renders is stopped with its Worker. A session ends on `close`, the
+  page going away or a message that cannot be read (`messageerror`, the port's or the render Worker's: protocol 3's
+  port error), all alike: its render stopped (the Worker terminated), the port's handlers off and the port let go, so
+  the next `connect` starts a new session. Credits (`render-credit`) add up to at most 4800 (8 outputs x 600 chunks
+  of 1 s, protocol 6's budget).
 - Opened by itself (or not connected within 4 s): the browser emulator, its saves in this browser, a seed of its own,
   with a note; a `connect` after that is refused (reload the frame to connect).
 - `/credits.html`: who made what (JIANT FM, Felucca, SLOOP, X0X and the rest of JIANT's credits), the licences, the

@@ -561,15 +561,15 @@ static uint32_t midi_beat_samples;                    /* zero until an external 
 static uint32_t beat_samples(void)
 {
 #if JIANT_TUTTI
-    if (tutti_beat_q32 && !(song.g[G_CLOCK] && midi_beat_samples))
+    if (tutti_beat_q32 && !(CLOCK_EXT && midi_beat_samples))
         return (uint32_t)((tutti_beat_q32 + 0x80000000u) >> 32);   /* (rounded: the delay, LFO SYNC, the ARP, a ratchet) */
 #endif
-    return song.g[G_CLOCK] && midi_beat_samples ? midi_beat_samples : (uint32_t)FS * 60u / (uint32_t)song.g[G_BPM];
+    return CLOCK_EXT && midi_beat_samples ? midi_beat_samples : (uint32_t)FS * 60u / (uint32_t)song.g[G_BPM];
 }
 #if JIANT_TUTTI
 /* hosted: the step clocks' fractions (seq.c seq_tick, click_tick, the beat; song_play.c chain_tick's bar) */
 static uint32_t tutti_seq_frac[NTRK], tutti_clk_frac, tutti_beat_frac, tutti_chain_frac;
-static int tutti_steps(void) { return tutti_beat_q32 && !song.g[G_CLOCK]; }   /* (an external clock: its own steps) */
+static int tutti_steps(void) { return tutti_beat_q32 && !CLOCK_EXT; }   /* (an external clock: its own steps) */
 static uint64_t tutti_div_q32(uint32_t div)          /* div_samples, exact */
 {
     return div < 6u ? tutti_beat_q32 / DIV_DEN[div] : div < 10u ? tutti_beat_q32 << (div - 5u)

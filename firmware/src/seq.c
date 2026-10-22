@@ -111,14 +111,14 @@ static void mo_key(const track_t *t, uint32_t pkt)   /* a key's note: not with O
     if (mo_lvl != MO_OFF && !(mo_lvl == MO_ALL && t->p[P_AMODE]))
         midi_out_event(pkt);
 }
-static int mo_clock_on(void) { return (mo_lvl == MO_CLOCK || mo_lvl == MO_ALL) && !song.g[G_CLOCK]; }
+static int mo_clock_on(void) { return (mo_lvl == MO_CLOCK || mo_lvl == MO_ALL) && !CLOCK_EXT; }
 static __attribute__((noinline)) void mo_block(uint32_t n)   /* events_block: the setting changed; the clock */
 {
     if (mo_lvl != mo_last) {
         if (mo_last == MO_ALL)
             mo_flush();
         if ((mo_last == MO_CLOCK || mo_last == MO_ALL) && !(mo_lvl == MO_CLOCK || mo_lvl == MO_ALL) && song.playing &&
-            !song.g[G_CLOCK])
+            !CLOCK_EXT)
             mo_send(0xFCu, 0, 0);                    /* (the clock leaves: whatever follows it stops) */
         mo_last = mo_lvl;
     }
@@ -1512,7 +1512,7 @@ static void seq_stop(void)
     cin_left = 0;                                  /* (a count-in: cancelled, nothing recorded) */
     cin_flush = 0;
     memset(cin_n, 0, sizeof cin_n);
-    if (song.g[G_CLOCK])                           /* external clock: the arp stops with the transport, */
+    if (CLOCK_EXT)                                 /* external clock: the arp stops with the transport, */
         for (i = 0; i < NPART; i++)                /* its sounding note too (HOLD keeps the latched chord) */
             if (trk[i].arp_note)
                 arp_off(&trk[i]);
@@ -2335,7 +2335,7 @@ static void tutti_beat(uint32_t b)
 static void events_block(uint32_t n)
 {
     uint32_t i, pr, fo, seq_n = n;
-    uint32_t clock_mode = (uint32_t)song.g[G_CLOCK];
+    uint32_t clock_mode = (uint32_t)CLOCK_EXT;
     if (midi_clock.mode != clock_mode) {
         seq_stop();
         memset(&midi_clock, 0, sizeof midi_clock);

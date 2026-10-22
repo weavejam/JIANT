@@ -322,7 +322,7 @@ static int edit_recallable(void) { return project_recall_slot() >= 0; }
 static void glo_tap(void)
 {
     uint32_t n = lys.ntap, i;
-    if (song.g[G_CLOCK]) {
+    if (CLOCK_EXT) {
         ui_message("TAP: CLK IS EXT");
         return;
     }
@@ -730,7 +730,7 @@ static int layer_play(void)
 {
     if (layer_open() != LAYER_GLO || chain_busy())
         return 0;
-    if (song.g[G_CLOCK] && song.playing) {
+    if (CLOCK_EXT && song.playing) {
         ui_message("RESTART: CLK IS EXT");
         return 1;
     }
@@ -802,7 +802,7 @@ static uint32_t layer_leds(uint32_t *br)
         } else if (l == LAYER_GLO) {                    /* sounding lit; SOLO held lit, the others, C4, F4 breathe */
             on = b ? (p < NTRK && glo_sounding(p)) || (p >= NTRK && p < NTRK + 4u && !((dx_mute >> (p - NTRK)) & 1u))
                    : p < NTRK && ((lys.solo >> k) & 1u);      /* (a group sounding: lit) */
-            can = !b && ((p < NTRK && p < trk_live) || p == GLO_ALL || (p == GLO_TAP && !song.g[G_CLOCK]) ||
+            can = !b && ((p < NTRK && p < trk_live) || p == GLO_ALL || (p == GLO_TAP && !CLOCK_EXT) ||
                          (p == GLO_UNDO && undo_ok) || p == GLO_FRZ || (p == GLO_RVA && mut_back_ok()));
                                                         /* (the keys that do something breathe: not an asleep track's) */
             on |= !b && p == GLO_FRZ && mut_freeze;      /* (0.6.43: FREEZE on: lit) */
@@ -933,7 +933,7 @@ static uint32_t ly_keyname(uint32_t l, int blk, uint32_t p, char *nm)
         }
         str_cpy(nm, p == GLO_ALL ? "UNMUTE" : p == GLO_TAP ? "TAP" : p == GLO_UNDO ? "UNDO" : p == GLO_FRZ ? "FREEZE" :
                     p == GLO_RVA ? "REVERT ALL" : "", 12);
-        return p == GLO_TAP && song.g[G_CLOCK] ? LS_DIM : p == GLO_UNDO && !undo_ok ? LS_DIM : p == GLO_FRZ && mut_freeze ? LS_HELD :
+        return p == GLO_TAP && CLOCK_EXT ? LS_DIM : p == GLO_UNDO && !undo_ok ? LS_DIM : p == GLO_FRZ && mut_freeze ? LS_HELD :
                p == GLO_RVA && !mut_back_ok() ? LS_DIM : LS_OFF;
     }
     if (l == LAYER_SCL) {                               /* every key its note: the root lit, the scale's plain, the rest dim */

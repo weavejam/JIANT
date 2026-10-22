@@ -179,14 +179,18 @@ const live = {
 // one render at a time in it: one still running when another starts (its session ended meanwhile: it is let go, not
 // waited for) goes with its worker, and the new one gets a fresh worker
 let worker = null, workerBusy = null;
-function renderInWorker(state, req, sink) {
-  // (an ended session's render, its state made late: it never touches the worker, the next session's render may be in it)
-  if (sink.cancelled()) return Promise.reject(new RenderError("cancelled", "cancelled"));
+// the render running in it stopped: the worker terminated with it (the session's end, engine.stopRenders)
+function stopWorker() {
   if (worker && workerBusy) {
     worker.terminate();
     workerBusy(new RenderError("cancelled", "the session ended"));
     worker = null;
   }
+}
+function renderInWorker(state, req, sink) {
+  // (an ended session's render, its state made late: it never touches the worker, the next session's render may be in it)
+  if (sink.cancelled()) return Promise.reject(new RenderError("cancelled", "cancelled"));
+  stopWorker();
   worker = worker || new Worker(new URL("./render-worker.js", import.meta.url), { type: "module" });
   const w = worker;
   $("tt-render").hidden = false;
@@ -211,6 +215,11 @@ function renderInWorker(state, req, sink) {
       else if (m.type === "error") { end(); reject(new RenderError(m.code, m.message)); }
     };
     w.onerror = (e) => { end(); worker = null; w.terminate(); reject(new RenderError("internal", e.message || "the render worker failed")); };
+    w.onmessageerror = () => {                         // (a chunk lost: the session ends, as on a port error)
+      log("tutti: a message of the render worker could not be read: the session ends");
+      stopWorker();
+      session.close();
+    };
     w.postMessage({ type: "render", wasmUrl: WASM_URL, state, req });
   });
 }
@@ -218,6 +227,7 @@ function renderInWorker(state, req, sink) {
 // ------------------------------------------------------------------ the session
 const engine = new JiantEngine({
   render: renderInWorker,
+  stopRenders: stopWorker,
   live,
   onChanged: (rev) => session.stateChanged(rev),
 });

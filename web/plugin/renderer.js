@@ -25,6 +25,11 @@ export const OUTPUTS = [
   { id: "t6", name: "T6", channels: 2 },
 ];
 export const MAX_SECONDS = 600, MAX_TAIL_MS = 10000;
+// the pre-roll's budget (no seek: a render runs from beat 0 to fromBeat first): fromBeat at most the longest result
+// (MAX_SECONDS, protocol 6) plus the longest tail from beat 0 at the render's tempo, so a render's work is at most twice
+// the longest result
+export const MAX_PREROLL_SECONDS = MAX_SECONDS + MAX_TAIL_MS / 1000;
+const MAX_FRAME = 0xFFFFFFFF;                          // the wasm's frames are uint32, ~0u "never" (jiant_plugin.c tutti_start)
 export const MIN_BPM = 40, MAX_BPM = 240;              // the firmware's tempo range (jiant_plugin.c tutti_bpm_min/max)
 export const BLOCK = 32;                               // the firmware's control block (jiant_plugin.c tutti_block_frames)
 export const HALF = 128;                               // the audio ISR's half: what a render call makes at a time
@@ -100,6 +105,9 @@ export function planRender(req, { tempoMap = "constant" } = {}) {
     throw new RenderError("unsupported", "the tempo changes inside the range: JIANT FM renders a constant tempo (approximation 'start-tempo')");
   if (!(bpm >= MIN_BPM && bpm <= MAX_BPM))
     throw new RenderError("unsupported", `${bpm} BPM at fromBeat: JIANT FM plays ${MIN_BPM} .. ${MAX_BPM} BPM`);
+  const stop = Math.round(((toBeat * 60) / bpm) * NATIVE_RATE);
+  if (!(stop + BLOCK < MAX_FRAME))                     // (the last note-off a block after toBeat at most)
+    throw new RenderError("bad-request", `toBeat ${toBeat}: past the frames JIANT FM can count at ${bpm} BPM`);
   const sr = sampleRate, tail = Math.ceil((tailMs * sr) / 1000);
   // protocol 5: frame(beat) integrates the map from beat 0. With 'start-tempo' (protocol 7) frame() is a constant map at
   // the tempo at fromBeat: the range rendered at that tempo throughout, its length that tempo's (the host warps it)
@@ -108,16 +116,19 @@ export function planRender(req, { tempoMap = "constant" } = {}) {
   const frames = body + tail;
   if (frames <= 0) throw new RenderError("bad-request", "an empty range");
   if (frames > MAX_SECONDS * sr) throw new RenderError("too-large", `${frames} frames: at most ${MAX_SECONDS} s`);
-  return { bpm, rate: sr, outputs: outputs.slice(), frames, skip: own(fromBeat), body,
-           stop: Math.round(((toBeat * 60) / bpm) * NATIVE_RATE),
+  if ((fromBeat * 60) / bpm > MAX_PREROLL_SECONDS)
+    throw new RenderError("too-large", `fromBeat ${fromBeat}: more than ${MAX_PREROLL_SECONDS} s from beat 0 at ${bpm} BPM (JIANT FM renders from beat 0)`);
+  return { bpm, rate: sr, outputs: outputs.slice(), frames, skip: own(fromBeat), body, stop,
            events: req.input ? midiEvents(req.input, bpm, toBeat) : null };
 }
 
 // use B: the notes (released at min(their end, toBeat)), CC and pitch bend, at 44.1 kHz frames of the plugin's
 // timeline, in time order; at one frame: controllers, then note-offs, then note-ons. A note's off comes a block after
-// its on at least (protocol 7b: a note of length <= 0 still gets its off after its on; the firmware takes MIDI per
-// block, so an off in the on's block would let it go before it sounded). Moved that way, an off never goes past the
-// next on of its pitch on its channel: at that frame at the latest, before the on (it would cut that note)
+// its on at least (protocol 7b: a note of length <= 0, negative too, still gets its off after its on; the firmware takes
+// MIDI per block, so an off in the on's block would let it go before it sounded). Moved that way, an off never goes past
+// the next on of its pitch on its channel: at that frame at the latest, before the on (it would cut that note). A
+// channel whose sustain pedal is down at toBeat gets CC64 0 there, after the offs (its pedal-up later is not in the
+// range): its notes are let go at toBeat as without the pedal, their release and the effects ring out in the tail
 export function midiEvents(input, bpm, toBeat) {
   const f = (b) => Math.round(((Math.max(0, b) * 60) / bpm) * NATIVE_RATE);
   const ev = [], ch = (c) => Number.isInteger(c) && c >= 0 && c <= 15;
@@ -128,9 +139,8 @@ export function midiEvents(input, bpm, toBeat) {
     throw new RenderError("too-large", "input: at most 30000 events");
   const ons = new Map();                               // channel * 128 + pitch -> the on frames, sorted
   for (const n of input.notes) {
-    if (!n || !finite(n.beat) || !finite(n.lengthBeats) || n.lengthBeats < 0 || !int(n.pitch, 0, 127) ||
-        !int(n.velocity, 1, 127) || !ch(n.channel))
-      throw new RenderError("bad-request", "input.notes: beat, lengthBeats >= 0, pitch 0..127, velocity 1..127, channel 0..15");
+    if (!n || !finite(n.beat) || !finite(n.lengthBeats) || !int(n.pitch, 0, 127) || !int(n.velocity, 1, 127) || !ch(n.channel))
+      throw new RenderError("bad-request", "input.notes: beat, lengthBeats, pitch 0..127, velocity 1..127, channel 0..15");
     if (n.beat >= toBeat) continue;
     const k = n.channel * 128 + n.pitch;
     if (!ons.has(k)) ons.set(k, []);
@@ -145,7 +155,7 @@ export function midiEvents(input, bpm, toBeat) {
   };
   for (const n of input.notes) {
     if (n.beat >= toBeat) continue;
-    const on = f(n.beat), end = f(Math.min(n.beat + n.lengthBeats, toBeat));
+    const on = f(n.beat), end = f(Math.min(n.beat + Math.max(0, n.lengthBeats), toBeat));
     const off = Math.max(end, Math.min(on + BLOCK, nextOn(n.channel * 128 + n.pitch, on)));
     ev.push({ frame: on, order: 2, status: 0x90 | n.channel, d1: n.pitch, d2: n.velocity });
     ev.push({ frame: off, order: 1, status: 0x80 | n.channel, d1: n.pitch, d2: 0 });
@@ -163,6 +173,18 @@ export function midiEvents(input, bpm, toBeat) {
   }
   ev.forEach((e, i) => (e.i = i));
   ev.sort((a, b) => a.frame - b.frame || a.order - b.order || a.i - b.i);
+  const pedal = new Set();                             // the channels whose pedal is down at toBeat (midi_control.c CC64,
+  for (const e of ev)                                  // CC121 lets it go too)
+    if (e.status >> 4 === 0xB && (e.d1 === 64 || e.d1 === 121)) {
+      if (e.d1 === 64 && e.d2 >= 64) pedal.add(e.status & 15);
+      else pedal.delete(e.status & 15);
+    }
+  if (pedal.size) {
+    const stop = f(toBeat);
+    let at = ev.findIndex((e) => e.frame > stop || (e.frame === stop && e.order > 1));
+    if (at < 0) at = ev.length;
+    ev.splice(at, 0, ...[...pedal].sort((a, b) => a - b).map((c) => ({ frame: stop, order: 1, status: 0xB0 | c, d1: 64, d2: 0 })));
+  }
   return ev;
 }
 

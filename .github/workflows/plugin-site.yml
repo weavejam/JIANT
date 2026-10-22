@@ -81,7 +81,8 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
 
-      # Deployment (jiant.tooljams.com, by the lead for now), only from a push to main (the production site).
+      # Deployment (by the lead for now), only from a push to main: the production site at
+      # https://jiant.plugins.tooljams.com, the preview at https://jiant-preview.plugins.tooljams.com.
 
   host-tests:
     runs-on: ubuntu-24.04

@@ -128,12 +128,15 @@ static int32_t tt_cap[NPART][TT_MAXB][TT_NCAP][CTL];   /* each part's share of e
 static tutti_blk_t tt_blk[TT_MAXB];                     /* .. and the master's (fx.c tutti_b) */
 static uint32_t tt_capture, tt_nb, tt_cur, tt_frames, tt_headless;
 
-/* power on as web_boot, for the host: the session's seed pinned, the state's music in any case. headless (a render):
- * the splash over at once (the main loop from the next millisecond), the keys free, MASTER at its top (the render's
- * level; the live page keeps its knob), the internal clock, no recording, no click, MIDI IN's channels to their parts */
+/* power on as web_boot, for the host: the session's seed pinned, the state's music in any case, the host's clock (the
+ * internal one at the host's tempo, core.h CLOCK_EXT: the live preview and a render alike, MENU CLOCK as the state has
+ * it, USB or TRS too; the setting itself unchanged, the state keeps it). headless (a render): the splash over at once
+ * (the main loop from the next millisecond), the keys free, MASTER at its top (the render's level; the live page keeps
+ * its knob), no recording, no click, MIDI IN's channels to their parts */
 EXPORT void tutti_boot(uint32_t headless)
 {
     tt_headless = headless;
+    tutti_hosted = 1;
     web_seed(TT_SEED);
     web_boot();
     tutti_restore();
@@ -142,7 +145,6 @@ EXPORT void tutti_boot(uint32_t headless)
         kb_boot_hold = 0;
         web_master(1023);
         song.master_q12 = MASTER_FULL;
-        song.g[G_CLOCK] = 0;                          /* the host's clock: the internal one at its tempo */
         song.g[G_ROUTE] = 0;                          /* MIDI channels 1..6 play T1..T6 (manifest midiChannels) */
         song.rec = 0;
     }

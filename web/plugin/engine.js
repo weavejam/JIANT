@@ -10,22 +10,26 @@
 //     close()
 //   } and it calls engine.changed() when its music or flash changed (the page's check, tutti.js)
 // A revision is a state the host may ask a render of: 1 the one init gave (or the factory state), +1 when the live
-// device changed since the last revision; its bytes are made when the host asks for them (get-state) or renders it.
+// device changed since the last revision; its bytes are made when the host asks for them (get-state) or renders it,
+// once: what asks for them while its snapshot is made waits for that snapshot (a revision is never two sets of bytes).
+// stopRenders(): what close() stops besides the live device (the page: its render Worker's work, tutti.js).
 import { packState, unpackState, emptyState, STATE_VERSION, StateError } from "./state.js";
 import { RenderError, checkTimeMap, tempoAt, MIN_BPM, MAX_BPM } from "./renderer.js";
 
 const KEEP = 8;                                        // revisions whose states are kept for renders
 
 export class JiantEngine {
-  constructor({ render, live = null, onChanged = () => {}, name = () => null }) {
+  constructor({ render, live = null, onChanged = () => {}, name = () => null, stopRenders = () => {} }) {
     this.renderFn = render;
     this.live = live;
+    this.stopRenders = stopRenders;
     this.onChanged = onChanged;                        // (revision): the session's state-changed
     this.name = name;
     this.revision = 0;
     this.states = new Map();                           // revision -> { rev, buf, state }
     this.dirty = false;                                // the live device changed since `revision` was made
     this.epoch = 0;                                    // +1 per init: what an earlier session's await gives is dropped
+    this.making = null;                                // the snapshot being made: { epoch, rev, p }
   }
 
   async init({ context, state, stateVersion, mode }) {
@@ -35,6 +39,7 @@ export class JiantEngine {
     this.epoch++;
     this.revision = 1;
     this.dirty = false;
+    this.making = null;
     this.states.clear();
     this.keep(1, { rev: 1, buf: state ? state.slice(0) : packState(st), state: st });   // (the input is never changed)
     if (mode === "edit" && this.live) await this.live.load(st, context);
@@ -57,18 +62,34 @@ export class JiantEngine {
   }
 
   // the state of the current revision ({ rev, buf, state }), made now if it is not yet: kept as the revision current
-  // when it was asked for; if its session ended meanwhile (another init), dropped, never kept
+  // when it was asked for; asked for again while it is made, that same snapshot; if its session ended meanwhile
+  // (another init), dropped, never kept
   async current() {
     const have = this.states.get(this.revision);
     if (have && !this.dirty) return have;
     if (!this.live || this.mode !== "edit") return have;
+    const making = this.pending(this.revision);
+    if (making) return making;
     this.dirty = false;                                // (a change from here on: the next revision)
     const epoch = this.epoch, rev = this.revision;
-    const st = await this.live.snapshot();
-    if (epoch !== this.epoch) throw new RenderError("session-ended", "the session ended");
-    const s = { rev, buf: packState(st), state: st };
-    this.keep(rev, s);
-    return s;
+    const m = this.making = { epoch, rev, p: null };
+    m.p = (async () => {
+      try {
+        const st = await this.live.snapshot();
+        if (epoch !== this.epoch) throw new RenderError("session-ended", "the session ended");
+        const s = { rev, buf: packState(st), state: st };
+        this.keep(rev, s);
+        return s;
+      } finally {
+        if (this.making === m) this.making = null;
+      }
+    })();
+    return m.p;
+  }
+  // the snapshot of revision rev being made in this session, or null
+  pending(rev) {
+    const m = this.making;
+    return m && m.epoch === this.epoch && m.rev === rev ? m.p : null;
   }
 
   async getState() {
@@ -87,12 +108,16 @@ export class JiantEngine {
   async render(req, sink) {
     let s = this.states.get(req.stateRevision);
     if (req.stateRevision === this.revision) s = await this.current();
+    else if (!s && this.pending(req.stateRevision)) s = await this.pending(req.stateRevision);   // (an edit since it was asked for)
     if (sink.cancelled()) throw new RenderError("cancelled", "cancelled");   // (its session ended while the state was made)
     if (!s) throw new RenderError("state-incompatible", `state revision ${req.stateRevision} is not known (now ${this.revision})`);
     return this.renderFn(s.state, req, sink);
   }
 
-  close() { if (this.live) this.live.close(); }
+  close() {
+    this.stopRenders();
+    if (this.live) this.live.close();
+  }
 }
 
 // the live preview's tempo (tutti.js live): the host's time map (`context`) and the tempo at a beat, within JIANT's

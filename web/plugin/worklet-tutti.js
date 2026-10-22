@@ -3,8 +3,9 @@
 // The plugin page's live JIANT FM: the emulator's worklet (web/emu/worklet.js, its Felucca processor) on the plugin's
 // build (jiant_plugin.c) with what the host needs from it:
 //   load            {wasm?, sectors, songMode, hosted, master}: hosted, booted by tutti_boot (the session's seed pinned,
-//                   the state's music, RESTORE LAST or not, its PLAY mode); on its own (standalone) as the emulator's
-//                   (a seed of its own); again for a new state (the module kept)
+//                   the state's music, RESTORE LAST or not, its PLAY mode, the host's clock whatever MENU CLOCK
+//                   says); on its own (standalone) as the emulator's (a seed of its own, its CLOCK); again for a new
+//                   state (the module kept)
 //   tutti-tempo     {bpm}: the host's tempo (fractional)
 //   tutti-play      {gen, playing, atFrame, pos}: the host's transport, listen-only: play from `pos` (frames of
 //                   44.1 kHz from beat 0) at this context's frame `atFrame`; the same generation again: only a drift

@@ -153,6 +153,16 @@ for (const [bpm, from, to, tail, sr] of [[120, 0, 8, 0, 44100], [123.45, 4, 13.5
         ex.tutti_bpm_min() === MIN_BPM && ex.tutti_bpm_max() === MAX_BPM && ex.tutti_tempo(300) === 0 && ex.tutti_tempo(39) === 0 &&
         ex.tutti_tempo(123.45) === 1);
 }
+{ // the pre-roll's budget (no seek: every render runs from beat 0): fromBeat at most 600 s + 10 s (protocol 6's render
+  // budget and the longest tail) from beat 0 at the render's tempo, else too-large; frames the wasm's uint32 counters
+  // cannot hold: bad-request
+  const code = (o) => { try { planRender(req(o)); return "ok"; } catch (e) { return e.code; } };
+  const at120 = 610 * 2;                               // 610 s at 120 BPM
+  check(`pre-roll: fromBeat ${at120} at 120 BPM (610 s) renders, ${at120 + 0.1} too-large; 1e12 beats bad-request`,
+        code({ fromBeat: at120, toBeat: at120 + 4 }) === "ok" && code({ fromBeat: at120 + 0.1, toBeat: at120 + 4 }) === "too-large" &&
+        code({ fromBeat: 1e12, toBeat: 1e12 + 4 }) === "bad-request" && code({ fromBeat: 0, toBeat: 1e12 }) === "bad-request" &&
+        code({ context: ctxOf(40), fromBeat: 406, toBeat: 410 }) === "ok" && code({ context: ctxOf(40), fromBeat: 407, toBeat: 410 }) === "too-large");
+}
 { // progress (protocol 6, no seek): over the pre-roll from beat 0 and the range, monotonic, to 1
   const seen = [];
   let chunks = 0;
@@ -337,6 +347,28 @@ if (!FAST) {
   const end = (x) => peak(x.subarray(x.length - 44100));
   check(`zero-length notes: the note sounds (peak ${peak(o).toFixed(3)}) and is let go (the last second ${end(o).toFixed(4)}, held ${end(held).toFixed(4)})`,
         peak(o) > 1e-3 && end(o) < end(held) / 4);
+  // negative lengths (protocol 7b: lengthBeats <= 0): taken as 0, the on then the off
+  let ev3 = null;
+  try { ev3 = midiEvents({ notes: [n(1, -0.5), n(2, -1e9)], cc: [], pitchBend: [], preRollBeats: 0 }, 120, 8); } catch {}
+  const k3 = ev3 && ev3.map((e) => `${e.status >> 4 === 9 ? "on" : "off"}@${e.frame}`).join(" ");
+  check(`negative-length notes: as length 0, the on then the off a block later (${k3})`,
+        k3 === `on@${at(1)} off@${at(1) + 32} on@${at(2)} off@${at(2) + 32}`);
+}
+{ // the sustain pedal down over toBeat, up after it: let go at toBeat (CC64 0 after the notes' offs), so the tail is the
+  // notes' release as without the pedal, not a held note
+  const n = { beat: 1, lengthBeats: 10, pitch: 60, velocity: 100, channel: 0 };
+  const pedal = { notes: [n], cc: [{ beat: 0, channel: 0, cc: 64, value: 127 }, { beat: 6, channel: 0, cc: 64, value: 0 }],
+                  pitchBend: [], preRollBeats: 0 };
+  const ev = midiEvents(pedal, 120, 4), stop = Math.round(4 * 0.5 * 44100);
+  const up = ev.filter((e) => e.status === 0xB0 && e.d1 === 64 && e.d2 === 0);
+  const off = ev.findIndex((e) => e.status === 0x80 && e.d1 === 60);
+  check(`pedal over toBeat: CC64 0 at toBeat (frame ${up.map((e) => e.frame).join()}), after the note's off`,
+        up.length === 1 && up[0].frame === stop && ev.indexOf(up[0]) > off && off >= 0);
+  const plain = { ...pedal, cc: [] };
+  const a = (await renderAll(heavy, req({ input: pedal, toBeat: 4, tailMs: 2000, outputs: ["t1"] }))).out.t1;
+  const b = (await renderAll(heavy, req({ input: plain, toBeat: 4, tailMs: 2000, outputs: ["t1"] }))).out.t1;
+  check(`pedal over toBeat: the tail is the note's release as without the pedal, bit for bit (peak ${peak(b[0]).toFixed(3)})`,
+        peak(b[0]) > 1e-3 && same(a[0], b[0]) && same(a[1], b[1]));
 }
 { // the host's tempo is a runtime value: not the song's G_BPM, not in the autosave's signature (the state)
   const { exports: ex } = await WebAssembly.instantiate(mod, {});
@@ -348,6 +380,34 @@ if (!FAST) {
   ex.tutti_tempo(181.25);
   for (let k = 0; k < 500 * 44.1; k += 128) ex.web_render(128);
   check(`host tempo: G_BPM stays the song's (${bpm0} -> ${g(ex)[0]}), the state's signature unchanged`, g(ex)[0] === bpm0 && ex.tutti_sig() === sig0);
+}
+{ // hosted, the clock is the host's (the internal one at its tempo) whatever MENU CLOCK says, live preview and render
+  // alike; the setting stays the user's (in the state)
+  const clk = (ex) => ex.tutti_test_gid(0) + 2;        // G_CLOCK (core.h: G_BPM, G_SWING, G_CLOCK)
+  const usb = await makeState((ex) => { ex.web_test_heavy(); g(ex)[clk(ex)] = 1; });   // CLOCK USB
+  const { exports: lv } = await WebAssembly.instantiate(mod, {});
+  lv._initialize(); lv.web_nor_erase(); restoreInto(lv, usb.sectors); lv.tutti_boot(0);
+  for (let k = 0; k < 1000 * 44.1; k += 128) lv.web_render(128);
+  lv.tutti_tempo(120);
+  lv.tutti_seek(1, 0);
+  while (lv.tutti_seek_run(1024, 0));
+  const steps = new Set();
+  let p = 0;
+  for (let k = 0; k < 2 * 44100; k += 128) {
+    lv.web_render(128);
+    steps.add(lv.tutti_seq_idx(3));
+    p = Math.max(p, peak(new Float32Array(lv.memory.buffer, lv.web_out_l(), 128)));
+  }
+  const kept = g(lv)[clk(lv)];
+  lv.tutti_snapshot();
+  const back = { sectors: storeSectors(new Uint8Array(lv.memory.buffer, lv.web_nor(), lv.web_nor_size())), songMode: false };
+  const { exports: ex2 } = await WebAssembly.instantiate(mod, {});
+  ex2._initialize(); ex2.web_nor_erase(); restoreInto(ex2, back.sectors); ex2.tutti_boot(0);
+  check(`CLOCK USB in the state: the live preview plays at the host's tempo (${steps.size} steps in 2 s, peak ${p.toFixed(3)}), CLOCK stays USB in the state`,
+        steps.size >= 8 && p > 0.01 && kept === 1 && g(ex2)[clk(ex2)] === 1);
+  const r = req({ toBeat: 8, tailMs: 200 });
+  const x = (await renderAll(usb, r)).out.mix[0], y = (await renderAll(heavy, r)).out.mix[0];
+  check("CLOCK USB in the state: a render is the internal clock's, bit for bit", peak(y) > 0.05 && same(x, y));
 }
 { // the preview's seek: bounded work per call (the worklet's quantum), the time meanwhile added; where it gets to the
   // same as one long seek
@@ -608,6 +668,35 @@ const collect = (h, renderId) => {                    // the chunks of a render,
   const pw = h.got.filter((m) => m.type === "render-progress" && m.renderId === "w2");
   check(`progress: render-progress messages, fraction 0..1, the last 1 (${pw.length} for w2)`, h.got.some((m) => m.type === "render-progress" && m.fraction >= 0 && m.fraction <= 1) &&
         pw.length > 0 && pw.at(-1).fraction === 1 && pw.every((m, i) => !i || m.fraction >= pw[i - 1].fraction));
+  // credits accumulate up to protocol 6's most chunks of a render (8 outputs x 600 chunks of 1 s), not without end
+  h.send({ type: "render", id: "c3", ...req({ renderId: "c3", stateRevision: rev, context: ctxOf(123.45), toBeat: 40 }) });
+  await sleep(300);
+  for (let k = 0; k < 5; k++) h.send({ type: "render-credit", renderId: "c3", chunks: 1e6 });
+  await sleep(300);
+  const credits = h.session.render && h.session.render.credits;
+  h.send({ type: "cancel", renderId: "c3" });
+  await h.reply("c3");
+  check(`credits: 5 grants of 1e6 held as ${credits} outstanding (at most 8 x 600)`, credits > 0 && credits <= 4800);
+  h.close();
+}
+
+// ---- a port's messageerror ends the session as close does (protocol 3: a port error), its render's work stopped, so
+// a new connect is a new session
+{
+  const h = harness();
+  let stops = 0;
+  h.engine.stopRenders = () => { stops++; };           // (the page: the render Worker terminated, tutti.js)
+  h.connect();
+  h.send({ type: "init", id: "i", sampleRate: 44100, context: ctxOf(120), state: null, stateVersion: null, mode: "render" });
+  await h.reply("i");
+  h.send({ type: "render", id: "m1", ...req({ renderId: "m1", toBeat: 60, outputs: ALL }) });
+  await sleep(500);
+  const port = h.session.port;
+  port.dispatchEvent(new Event("messageerror"));
+  await sleep(100);
+  const ended = h.session.state === "closed" && h.session.port === null && h.session.render === null;
+  check("port messageerror: the session ends (render stopped, handlers removed, port released), a new connect accepted",
+        ended && stops === 1 && port.onmessage === null && port.onmessageerror === null && h.connect({ generation: 2 }) === 1);
   h.close();
 }
 
@@ -863,6 +952,35 @@ function restoreInto(ex, sectors) {
   const s2 = await g2;
   check(`a change while a snapshot is made: kept as revision ${s2.stateRevision}, now ${engine.revision}`,
         s2.stateRevision === 2 && engine.revision === 3 && engine.dirty && stateEquals(engine.states.get(2).buf, packState(C)));
+}
+{ // a revision's bytes are made once: get-state twice and a render of it while its snapshot is made share that snapshot,
+  // an edit meanwhile is the next revision (its own snapshot)
+  const snaps = [], rendered = [];
+  const live = { load: async () => {}, context() {}, transport() {}, close() {},
+                 snapshot: () => new Promise((res) => snaps.push(res)) };
+  const engine = new JiantEngine({ render: (state) => { rendered.push(state); return { frames: 1, outputs: ["mix"] }; }, live });
+  const st = (v) => ({ sectors: { 0xE5000: new Uint8Array(4096).fill(v) }, songMode: false });
+  await engine.init({ context: ctxOf(120), state: null, stateVersion: null, mode: "edit" });
+  engine.changed();                                    // revision 2
+  const a = engine.getState();
+  await sleep(0);
+  const b = engine.getState();
+  const r = engine.render(req({ stateRevision: 2 }), { cancelled: () => false });
+  await sleep(0);
+  engine.changed();                                    // revision 3, while 2's snapshot is made
+  const asked = snaps.length;
+  snaps.splice(0).forEach((res, k) => res(st(k + 1)));
+  const [ga, gb] = await Promise.all([a, b]);
+  await r;
+  const c = engine.getState();
+  await sleep(0);
+  const asked3 = snaps.length;
+  snaps.splice(0).forEach((res) => res(st(9)));
+  const gc = await c;
+  check(`one snapshot per revision: ${asked} for two get-states and a render of revision 2, the same bytes; revision 3 its own`,
+        asked === 1 && ga.stateRevision === 2 && gb.stateRevision === 2 && stateEquals(ga.state, gb.state) &&
+        rendered.length === 1 && stateEquals(packState(rendered[0]), ga.state) && stateEquals(engine.states.get(2).buf, ga.state) &&
+        asked3 === 1 && gc.stateRevision === 3 && stateEquals(gc.state, packState(st(9))));
 }
 
 console.log(fails ? `plugin: ${fails} FAILED` : "plugin: all ok");

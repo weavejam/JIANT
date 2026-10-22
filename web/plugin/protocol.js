@@ -20,6 +20,9 @@ export const PROTOCOL = "tutti-plugin/0";
 export const CODES = ["bad-request", "unsupported", "busy", "state-incompatible", "cancelled", "too-large", "timeout",
                       "session-ended", "internal"];
 export const INITIAL_CREDITS = 8;
+// the most credits a render holds (protocol 6's budget: 8 outputs of at most 600 chunks of 1 s): grants add up to it, no
+// further
+export const MAX_CREDITS = 8 * 600;
 export const STATE_DEBOUNCE_MS = 600, STATE_MAX_WAIT_MS = 2000, PROGRESS_MS = 100;
 
 // The pages that may embed it (protocol 3), per deployment channel: chosen when the site is built (site.mjs
@@ -80,6 +83,10 @@ export class PluginSession {
     this.inited = false;
     this.initing = false;
     this.port.onmessage = (e) => this.onPort(e.data);
+    this.port.onmessageerror = () => {                 // (protocol 3: a port error ends the session, as close does)
+      this.log("tutti: a message could not be read: the session ends");
+      this.close();
+    };
     if (this.port.start) this.port.start();
     return 1;
   }
@@ -121,7 +128,7 @@ export class PluginSession {
         case "render-credit": {
           const r = this.render;
           if (r && r.renderId === m.renderId && Number.isInteger(m.chunks) && m.chunks > 0 && m.chunks <= 1e6) {
-            r.credits += m.chunks;
+            r.credits = Math.min(MAX_CREDITS, r.credits + m.chunks);
             r.wake();
           } else this.log("tutti: dropped render-credit");
           return;
@@ -252,6 +259,8 @@ export class PluginSession {
   resize(width, height) {
     this.send({ type: "resize", width: Math.round(width), height: Math.round(height) });
   }
+  // the session's end, whatever ends it (close, a port error, the page going away): its render stopped (and the engine's
+  // work for it), the port's handlers off and the port let go, so a new connect starts another session
   close() {
     if (this.state === "closed") return;
     if (this.render) { this.render.cancel = true; this.render.wake(); }
@@ -263,7 +272,7 @@ export class PluginSession {
     this.render = null;
     this.inited = this.initing = false;
     try { this.engine.close(); } catch {}
-    if (this.port) { this.port.onmessage = null; try { this.port.close(); } catch {} }
+    if (this.port) { this.port.onmessage = this.port.onmessageerror = null; try { this.port.close(); } catch {} }
     this.port = null;                                  // (a new connect may start another session)
   }
 }

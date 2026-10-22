@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (C) 2026 weavejam
-// The plugin's static site (web/plugin/build.sh calls it), for Cloudflare Pages or any static host:
+// The plugin's static site (web/plugin/build.sh calls it), for Cloudflare Pages or any static host (deployed: production
+// https://jiant.plugins.tooljams.com, preview https://jiant-preview.plugins.tooljams.com):
 //   PLUGIN_CHANNEL=production|preview node web/plugin/site.mjs WASM OUT JIANT_VERSION
 //   OUT/tutti-plugin.json   the manifest (protocol-v0 1), CORS * (_headers)
 //   OUT/_headers            Cloudflare Pages: the manifest's CORS and no-cache, frame-ancestors (the channel's embedders),
