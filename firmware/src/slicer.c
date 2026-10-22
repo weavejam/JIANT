@@ -112,12 +112,19 @@ static int32_t sl_pitch(uint32_t i)
  * (mod.c clk_n / clk_pos: the 1/16 steps since PLAY, through tempo changes and an external clock): the step and the
  * place in it from there, so a SLICER switched on, its RATE changed or the tempo moved lands on the bar at once. Swing
  * pairs two steps: their pair from the grid, the step in it */
+#if JIANT_TUTTI
+static void tutti_sl_entered(const sl_t *s, uint32_t at);   /* (fx.c: hosted, the step kept for the parts' stems) */
+#endif
 static __attribute__((noinline)) void sl_enter(sl_t *s, uint32_t at)
 {
     uint32_t mode = (uint32_t)song.g[G_SLMODE], den = SL_DEN[(uint32_t)song.g[G_SLRATE] % 6u];
     int32_t sw;
     s->idx = (uint8_t)((s->idx + 1u) & 15u);
     s->base = (uint32_t)FS * 60u / (uint32_t)song.g[G_BPM] / den;
+#if JIANT_TUTTI
+    if (tutti_beat_q32)
+        s->base = beat_samples() / den;             /* (hosted: the host's tempo; playing, the grid's below) */
+#endif
     s->pos = 0;
     sw = clamp(song.g[G_SWING], 0, SWING_MAX);
     if (song.playing && clk_pos != CLK_START) {
@@ -160,6 +167,9 @@ static __attribute__((noinline)) void sl_enter(sl_t *s, uint32_t at)
         s->loop = l < most ? l : most;
         s->inc = ratio >> 1;                        /* (frames a 44.1 kHz sample, Q16: 1/2 at the pitch as played) */
     }
+#if JIANT_TUTTI
+    tutti_sl_entered(s, at);
+#endif
 }
 
 /* (0.9.8) MENU > USB STEMS with the SLICER on (sl_seg_tr): what each sample of the bus became, so that each part through

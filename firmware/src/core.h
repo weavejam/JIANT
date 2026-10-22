@@ -730,6 +730,38 @@ static inline uint32_t swing_step_len(const track_t *t, uint32_t base, uint32_t 
     int32_t sw = track_swing(t) * (int32_t)base / 250;
     return base + (uint32_t)((idx & 1u) ? -sw : sw);
 }
+#ifndef JIANT_TUTTI
+#define JIANT_TUTTI 0            /* hosted (web/plugin: the tuttidaw plugin): the host's tempo, fractional, keeps the
+                                  * step clocks on its grid (tutti_beat_q32), and each part's share of the mix goes out
+                                  * for its stem (fx.c tutti_part); 0 = none of it, the firmware as always */
+#endif
+#if JIANT_TUTTI
+static uint64_t tutti_beat_q32;  /* a beat (a quarter) in samples, Q32, from the host; 0 = G_BPM as always */
+static int16_t tutti_bpm_shown;  /* the host's tempo rounded, for the screen (G_BPM stays the song's own) */
+#define HEAD_BPM (tutti_beat_q32 ? tutti_bpm_shown : song.g[G_BPM])   /* the tempo the screen shows */
+static uint8_t tutti_hosted;     /* hosted (jiant_plugin.c tutti_boot): the host's clock, the internal one at its tempo,
+                                  * whatever MENU CLOCK says; the setting (in the state) stays the user's */
+#define CLOCK_EXT (tutti_hosted ? 0 : song.g[G_CLOCK])   /* the transport follows an external clock (USB, TRS) */
+/* hosted: a span of exactly len samples (Q32) as whole samples, from a clock's fraction *frac (Q32), which moves on to
+ * the next span's start when `next`: the spans add up to the exact time, so the clock never drifts from the host's
+ * grid (seq.c seq_tick, click_tick, the beat; song_play.c's bar) */
+static uint32_t tutti_span(uint64_t len, uint32_t *frac, int next)
+{
+    uint64_t end = *frac + len;
+    if (next)
+        *frac = (uint32_t)end;
+    return (uint32_t)(end >> 32);
+}
+/* .. a step of straight length base (Q32) swung as swing_step_len */
+static uint32_t tutti_len(const track_t *t, uint64_t base, uint32_t idx, uint32_t *frac, int next)
+{
+    uint64_t sw = (uint64_t)track_swing(t) * base / 250u;
+    return tutti_span((idx & 1u) ? base - sw : base + sw, frac, next);
+}
+#else
+#define HEAD_BPM song.g[G_BPM]
+#define CLOCK_EXT song.g[G_CLOCK]
+#endif
 
 /* ----------------------------------------------------------- system --- */
 #define RING_PUBLISH() __asm__ volatile("" ::: "memory")   /* slot store before the index update */

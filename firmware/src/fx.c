@@ -506,6 +506,12 @@ static inline int32_t spk_bass(int32_t m)
     return sb_hl * 3;
 }
 
+#if JIANT_TUTTI
+/* hosted: the leveler's gain (lev_cur) and the limiter's (Q15, 32768 none) on the last sample, and what went into the
+ * soft clip (mix_block, perf_master): the parts' stems get them too (web/plugin), so they sit in the mix as the master
+ * left it */
+static int32_t tutti_lev_s, tutti_lim_s, tutti_sc_l, tutti_sc_r;
+#endif
 static inline void master_out(int32_t *l, int32_t *r)
 {
     int32_t al, ar, a;
@@ -519,6 +525,10 @@ static inline void master_out(int32_t *l, int32_t *r)
         *r = lowcut1(*r, &lc_r1, &lce[2], sh);
         *r = lowcut1(*r, &lc_r2, &lce[3], sh) + b;
     }
+#if JIANT_TUTTI
+    tutti_lev_s = lev_cur;
+    tutti_lim_s = 32768;
+#endif
     *l = (clamp(*l, -262143, 262143) * (lev_cur >> 4)) >> 11;   /* (JIANT 0.5) the leveler's gain (lev_block) */
     *r = (clamp(*r, -262143, 262143) * (lev_cur >> 4)) >> 11;
     lev_cur += lev_dg;
@@ -533,7 +543,14 @@ static inline void master_out(int32_t *l, int32_t *r)
         int32_t g = (int32_t)(((uint32_t)LIM_T << 15) / (uint32_t)lim_env);   /* < 32768 */
         *l = ((*l >> 4) * g) >> 11;                      /* >> 4 first: |l| may be far above Q15 */
         *r = ((*r >> 4) * g) >> 11;
+#if JIANT_TUTTI
+        tutti_lim_s = g;
+#endif
     }
+#if JIANT_TUTTI
+    tutti_sc_l = *l;
+    tutti_sc_r = *r;
+#endif
     *l = softclip(*l);
     *r = softclip(*r);
 }
@@ -543,8 +560,22 @@ static const uint8_t DIV_DEN[6] = {1, 2, 4, 8, 3, 6};    /* original IDs stay fi
 static uint32_t midi_beat_samples;                    /* zero until an external clock has a measured tempo */
 static uint32_t beat_samples(void)
 {
-    return song.g[G_CLOCK] && midi_beat_samples ? midi_beat_samples : (uint32_t)FS * 60u / (uint32_t)song.g[G_BPM];
+#if JIANT_TUTTI
+    if (tutti_beat_q32 && !(CLOCK_EXT && midi_beat_samples))
+        return (uint32_t)((tutti_beat_q32 + 0x80000000u) >> 32);   /* (rounded: the delay, LFO SYNC, the ARP, a ratchet) */
+#endif
+    return CLOCK_EXT && midi_beat_samples ? midi_beat_samples : (uint32_t)FS * 60u / (uint32_t)song.g[G_BPM];
 }
+#if JIANT_TUTTI
+/* hosted: the step clocks' fractions (seq.c seq_tick, click_tick, the beat; song_play.c chain_tick's bar) */
+static uint32_t tutti_seq_frac[NTRK], tutti_clk_frac, tutti_beat_frac, tutti_chain_frac;
+static int tutti_steps(void) { return tutti_beat_q32 && !CLOCK_EXT; }   /* (an external clock: its own steps) */
+static uint64_t tutti_div_q32(uint32_t div)          /* div_samples, exact */
+{
+    return div < 6u ? tutti_beat_q32 / DIV_DEN[div] : div < 10u ? tutti_beat_q32 << (div - 5u)
+                                                                : tutti_beat_q32 / DIV_DEN[div % 6u];
+}
+#endif
 static uint32_t div_samples(uint32_t div)
 {
     uint32_t quarter = beat_samples();
@@ -2124,6 +2155,28 @@ static __attribute__((noinline)) void stem_fx_block(uint32_t n)
         stem_fx[1][i] = wr + fx_sr[i];
     }
 }
+#if JIANT_TUTTI
+/* hosted (web/plugin, tutti_on): each part's share of the block as mix_part added it (its dry L / R, what it put in the
+ * SLICER's bus, its CHORUS / DELAY / REVERB sends: the sums after it less the sums before; integers, so the mix is bit
+ * for bit what it is without), and what the master did to the whole: the SLICER's state (its step's, at the block's
+ * start and after a step began in it), what went into CLIP, the leveler's and the limiter's gain on each sample, the
+ * soft clip's input and output,
+ * the globals and the matrix's bus offsets the buses read. web/plugin/jiant_plugin.c keeps them for the parts' stems
+ * (each through buses, a SLICER and a DJ FILTER of its own, then the mix's master gains) */
+enum { TT_L, TT_R, TT_SL, TT_SR, TT_C, TT_D, TT_V, TT_NCAP };
+enum { TT_REST = 1, TT_CLIP = 2, TT_SLE = 4, TT_SLON = 8 };
+typedef struct {
+    uint32_t flags, sl_at, mg;                       /* (TT_*), where a SLICER step began, MASTER (Q12) */
+    int32_t clip_g, clip_mk;                         /* CLIP's drive and make-up (master_begin), TT_CLIP */
+    sl_t sl0, sl1;                                   /* the SLICER at the block's start; once its step began (TT_SLE) */
+    int16_t g[G_COUNT], gfx[8];                      /* song.g, mod.c gfx_off: as the buses ran */
+    int32_t lev[CTL], lim[CTL], cin[2][CTL];         /* the gains (master_out); what went into CLIP (TT_CLIP) */
+    int32_t sc[2][CTL], so[2][CTL];                  /* the soft clip's in and out (master_out) */
+} tutti_blk_t;
+static uint8_t tutti_on, tutti_sl_rec;
+static int32_t tutti_pc[NPART][TT_NCAP][CTL];
+static tutti_blk_t tutti_b;
+#endif
 /* the master with the FX layer's effects between its level and master_out (perform.c) */
 static __attribute__((noinline)) void perf_master(int32_t *out, uint32_t n)
 {
@@ -2137,6 +2190,14 @@ static __attribute__((noinline)) void perf_master(int32_t *out, uint32_t n)
     for (i = 0; i < n; i++) {
         int32_t l = mix_l[i], r = mix_r[i];
         master_out(&l, &r);
+#if JIANT_TUTTI
+        tutti_b.lev[i] = tutti_lev_s;
+        tutti_b.lim[i] = tutti_lim_s;
+        tutti_b.sc[0][i] = tutti_sc_l;
+        tutti_b.sc[1][i] = tutti_sc_r;
+        tutti_b.so[0][i] = l;
+        tutti_b.so[1][i] = r;
+#endif
         out[2u * i] = l;
         out[2u * i + 1u] = r;
     }
@@ -2443,6 +2504,54 @@ static __attribute__((noinline)) void mix_silent(int32_t *out, uint32_t n, uint3
     prf_blk[PRF_SEQ] = MC_TICKS() - t0;                 /* (PROFILE: the block's whole work, the events' with it) */
 }
 
+#if JIANT_TUTTI
+/* hosted: the captures above (each part's share, the master's), mix_block's */
+static void tutti_block(uint32_t n);                 /* (web/plugin: this block's, kept) */
+static __attribute__((noinline)) void tutti_part(uint32_t p, uint32_t n)
+{
+    int32_t *const at[TT_NCAP] = {mix_l, mix_r, sl_l, sl_r, send_c, send_d, send_r};
+    int32_t (*c)[CTL] = tutti_pc[p];
+    uint32_t k, i;
+    for (k = 0; k < TT_NCAP; k++)
+        for (i = 0; i < n; i++)
+            c[k][i] = at[k][i];
+    mix_part_m0(&trk[p], n);
+    for (k = 0; k < TT_NCAP; k++)
+        for (i = 0; i < n; i++)
+            c[k][i] = at[k][i] - c[k][i];
+}
+static void tutti_sl_entered(const sl_t *s, uint32_t at)   /* (slicer.c sl_enter) */
+{
+    if (!tutti_sl_rec)
+        return;
+    tutti_b.sl1 = *s;
+    tutti_b.sl_at = at;
+    tutti_b.flags |= TT_SLE;
+}
+static __attribute__((noinline)) void tutti_begin(void)
+{
+    memset(tutti_pc, 0, sizeof tutti_pc);
+    tutti_b.flags = 0;
+}
+static __attribute__((noinline)) void tutti_clip(uint32_t n)
+{
+    uint32_t i;
+    for (i = 0; i < n; i++) {
+        tutti_b.cin[0][i] = mix_l[i] + wet[i];
+        tutti_b.cin[1][i] = mix_r[i] + wet[i];
+    }
+    clip_block(n);
+    tutti_b.flags |= TT_CLIP;
+    tutti_b.clip_g = clip_g;
+    tutti_b.clip_mk = clip_mk;
+}
+static __attribute__((noinline)) void tutti_rest(uint32_t n)   /* the block is silent (mix_hush, master_rest) */
+{
+    tutti_b.flags |= TT_REST;
+    tutti_block(n);
+}
+#endif
+
 static __attribute__((noinline)) void mix_block(int32_t *out, uint32_t n)   /* (0.6.71: kept out of the ISR's
                                                                                * body, as before: target_budget.py) */
 {
@@ -2453,6 +2562,10 @@ static __attribute__((noinline)) void mix_block(int32_t *out, uint32_t n)   /* (
         send_c[i] = send_d[i] = send_r[i] = mix_l[i] = mix_r[i] = sl_l[i] = sl_r[i] = 0;
     if (fx_stems)                                       /* (0.7.1) a part not mixed this block: a silent stem */
         memset(stem_buf, 0, sizeof stem_buf);
+#if JIANT_TUTTI
+    if (tutti_on)
+        tutti_begin();
+#endif
     pfx_rec_held = perf_kill ? 0u : perf_held & PF_LANE;   /* (0.9.14: the audio ones too) */
     pfx_block(n, (perf_kill ? 0u : (perf_held | perf_latched) & PF_MIDI) | scene_pfx);
     events_block(n);
@@ -2467,6 +2580,10 @@ static __attribute__((noinline)) void mix_block(int32_t *out, uint32_t n)   /* (
 #ifndef FX_HUSH_OFF                                     /* (tests/hush_test.c: the reference without it) */
     if (!perf && mix_hush()) {                          /* (0.9.16) all at rest: nothing rendered (above) */
         mix_silent(out, n, t0);
+#if JIANT_TUTTI
+        if (tutti_on)
+            tutti_rest(n);
+#endif
         return;
     }
 #endif
@@ -2481,11 +2598,22 @@ static __attribute__((noinline)) void mix_block(int32_t *out, uint32_t n)   /* (
     }
     t1 = MC_TICKS();
     prf_blk[PRF_SEQ] = t1 - t0;                          /* (0.9.14) PROFILE: the sequencer and the block's set-up */
+#if JIANT_TUTTI
+    if (tutti_on) {                                     /* (the globals as the buses read them) */
+        memcpy(tutti_b.g, song.g, sizeof tutti_b.g);
+        memcpy(tutti_b.gfx, (const void *)gfx_off, sizeof tutti_b.gfx);
+        tutti_b.mg = (uint32_t)mg;
+    }
+#endif
     if (!c1j)
         fx_run0(n);                                     /* (0.6.75) the buses here: one core */
     for (i = 0; i < NPART; i++)
         if (!((c1m >> i) & 1u))
+#if JIANT_TUTTI
+            tutti_on ? tutti_part(i, n) : mix_part_m0(&trk[i], n);   /* hosted: each part's share kept (above) */
+#else
             mix_part_m0(&trk[i], n);
+#endif
     if (c1j) {
         t0 = MC_TICKS();
         i = (uint32_t)mc_wait();
@@ -2516,6 +2644,13 @@ static __attribute__((noinline)) void mix_block(int32_t *out, uint32_t n)   /* (
         fxq_d[i] = send_d[i];
         fxq_r[i] = send_r[i];
     }
+#if JIANT_TUTTI
+    if (tutti_on) {                                     /* (the SLICER as this block starts it: tutti_sl_entered) */
+        tutti_b.sl0 = sl;
+        tutti_b.flags |= slicer_on() ? TT_SLON : 0u;
+        tutti_sl_rec = 1;
+    }
+#endif
     if (fx_stems) {                                     /* (0.9.8) the same, traced: each part through it its own */
         stem_slicer_bus(n);                             /* stem; (0.7.1) and the stems' FX return (stem_fx_block) */
     } else {
@@ -2532,8 +2667,16 @@ static __attribute__((noinline)) void mix_block(int32_t *out, uint32_t n)   /* (
                 mix_r[i] += sl_r[i];
             }
     }
+#if JIANT_TUTTI
+    tutti_sl_rec = 0;
+#endif
     if (song.g[G_DJF] || perf_djf || djf.mode)          /* (0.9.1) the DJ FILTER; centred and out: not run */
         djf_block(n);
+#if JIANT_TUTTI
+    if (clip_g && tutti_on)
+        tutti_clip(n);                                  /* (what went into CLIP kept) */
+    else
+#endif
     if (clip_g)
         clip_block(n);
     t0 = MC_TICKS();
@@ -2541,6 +2684,10 @@ static __attribute__((noinline)) void mix_block(int32_t *out, uint32_t n)   /* (
 #ifndef FX_HUSH_OFF
     if ((mix_msil = (uint8_t)(!perf && master_rest(n))) != 0) {   /* (0.9.16) the master at rest: exactly 0 out */
         memset(out, 0, 2u * n * sizeof *out);
+#if JIANT_TUTTI
+        if (tutti_on)
+            tutti_rest(n);
+#endif
         return;
     }
 #endif
@@ -2552,9 +2699,21 @@ static __attribute__((noinline)) void mix_block(int32_t *out, uint32_t n)   /* (
             int32_t l = (((mix_l[i] + wet[i]) >> 2) * mg) >> 10;
             int32_t r = (((mix_r[i] + wet[i]) >> 2) * mg) >> 10;
             master_out(&l, &r);
+#if JIANT_TUTTI
+            tutti_b.lev[i] = tutti_lev_s;
+            tutti_b.lim[i] = tutti_lim_s;
+            tutti_b.sc[0][i] = tutti_sc_l;
+            tutti_b.sc[1][i] = tutti_sc_r;
+            tutti_b.so[0][i] = l;
+            tutti_b.so[1][i] = r;
+#endif
             out[2u * i] = l;
             out[2u * i + 1u] = r;
         }
     }
     prf_blk[PRF_MST] = MC_TICKS() - t0;
+#if JIANT_TUTTI
+    if (tutti_on)
+        tutti_block(n);
+#endif
 }

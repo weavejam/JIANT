@@ -1,0 +1,127 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 weavejam
+# JIANT FM for tuttidaw (web/plugin/README.md): the generated headers (no JieLi toolchain), the browser emulator and the
+# plugin built with Emscripten, their tests, and the plugin's static site for both deployment channels
+# (web/plugin/site.mjs PLUGIN_CHANNEL): production (embeddable by https://tuttidaw.com and https://www.tuttidaw.com
+# only) kept as an artifact on a push to main, preview (also http://localhost:<port>) on a pull request. A second job
+# runs the firmware's host tests that need no JieLi toolchain (tests/run_tests.sh's, built with cc): the sources the
+# plugin's JIANT_TUTTI parts touch play as before. Third-party actions are pinned to commits (the tag in the comment).
+name: plugin-site
+
+on:
+  push:
+    branches: [main]
+    paths: ["firmware/**", "web/**", "tools/**", "assets/**", "tests/**", "LICENSE*", "LICENSES/**", "LICENSING.md",
+            "README.md", ".gitignore", ".github/workflows/plugin-site.yml"]
+  pull_request:
+    paths: ["firmware/**", "web/**", "tools/**", "assets/**", "tests/**", "LICENSE*", "LICENSES/**", "LICENSING.md",
+            "README.md", ".gitignore", ".github/workflows/plugin-site.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-site-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}   # (every build of main runs to its end)
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065   # v5
+        with:
+          python-version: "3.13"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with:
+          node-version: "24"
+
+      - uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021   # v14
+        with:
+          version: "6.0.11"                 # (the version the emulator is tested with: emulator.yml)
+          actions-cache-folder: emsdk-cache   # (in .gitignore: the site needs a clean tree)
+
+      - name: Generated headers (fonts, icons, palettes, shapes, tables), as emulator.yml makes them
+        run: |
+          python3 -m pip install -q Pillow==12.3.0 numpy==2.3.5 fonttools==4.61.1
+          python3 -c "import sys; sys.path.insert(0, 'tools'); import build; build.generate()"
+
+      - name: Browser emulator (web/emu) and its tests
+        run: |
+          sh web/emu/build.sh
+          node web/emu/emu_test.mjs build/emu/felucca.wasm
+          node web/emu/stems_test.mjs build/emu/felucca.wasm
+
+      # both channels from one wasm; site.mjs fails on a tree with changes not in the commit (the source link)
+      - name: JIANT FM plugin (web/plugin), its sites and its test
+        run: |
+          git status --porcelain
+          PLUGIN_CHANNEL="production preview" sh web/plugin/build.sh
+          node web/plugin/plugin_test.mjs build/plugin-wasm/felucca.wasm build/emu/felucca.wasm
+
+      - name: Keep the production site
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
+        with:
+          name: jiant-plugin-site
+          path: build/plugin-site
+          include-hidden-files: true
+          if-no-files-found: error
+
+      - name: Keep the preview site
+        if: github.event_name != 'push'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
+        with:
+          name: jiant-plugin-site-preview
+          path: build/plugin-site-preview
+          include-hidden-files: true
+          if-no-files-found: error
+
+      # Deployment (by the lead for now), only from a push to main: the production site at
+      # https://jiant.plugins.tooljams.com, the preview at https://jiant-preview.plugins.tooljams.com.
+
+  host-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065   # v5
+        with:
+          python-version: "3.13"
+
+      - name: Generated headers
+        run: |
+          python3 -m pip install -q Pillow==12.3.0 numpy==2.3.5 fonttools==4.61.1
+          python3 -c "import sys; sys.path.insert(0, 'tools'); import build; build.generate()"
+
+      # tests/run_tests.sh's tests of the sources JIANT_TUTTI touches (fx.c, seq.c, slicer.c, song_play.c, audio.c,
+      # ui_draw.c), built as it builds them; the rest of run_tests.sh needs the firmware package (JieLi's toolchain)
+      - name: Host tests (golden renders, stems, SLICER, SWING, DJ FILTER, click, silence path, song, UI)
+        run: |
+          set -e
+          OUT=build/host; mkdir -p "$OUT"
+          CC="cc -O1 -Wall -Wno-unused-function"
+          t() { name=$1; shift; echo "== $name"; $CC -w -Ibuild/gen -Ifirmware/src -Itests "$@" -lm; }
+          t regress -O2 -o "$OUT/regress" tests/regress.c && "$OUT/regress" tests/golden.txt tests/cpu_baseline.txt
+          t stems -o "$OUT/stems_test" tests/stems_test.c && "$OUT/stems_test"
+          t slicer -O2 -o "$OUT/slicer_test" tests/slicer_test.c && "$OUT/slicer_test" build/slicer_demo
+          t swing -O2 -o "$OUT/swing_test" tests/swing_test.c && "$OUT/swing_test"
+          t djf -o "$OUT/djf_test" tests/djf_test.c && "$OUT/djf_test"
+          t click -O2 -o "$OUT/click_test" tests/click_test.c && "$OUT/click_test"
+          t motion -o "$OUT/motion_test" tests/motion_test.c && "$OUT/motion_test"
+          t ratchet -o "$OUT/ratchet_test" tests/ratchet_test.c && "$OUT/ratchet_test"
+          t live -o "$OUT/live_test" tests/live_test.c && "$OUT/live_test"
+          t perform -O2 -o "$OUT/perform_test" tests/perform_test.c && "$OUT/perform_test" build/perform_demo
+          t audio -o "$OUT/audio_test" tests/audio_test.c && "$OUT/audio_test"
+          t project -o "$OUT/project_test" tests/project_test.c && "$OUT/project_test"
+          t ui -o "$OUT/ui_test" tests/ui_test.c && "$OUT/ui_test"
+          t hush -O2 -o "$OUT/hush_test" tests/hush_test.c
+          t hush_ref -O2 -DFX_HUSH_OFF -o "$OUT/hush_ref" tests/hush_test.c
+          a=$("$OUT/hush_test"); b=$("$OUT/hush_ref"); echo "$a"   # (run_tests.sh hush_cmp: bit for bit as without it)
+          [ "$(echo "$a" | head -1)" = "$(echo "$b" | head -1)" ]
+          [ "$(echo "$a" | sed -n 's/^hush: \([0-9]*\) blocks.*/\1/p')" -gt 50000 ]

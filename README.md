@@ -659,6 +659,9 @@ These design notes are in Spanish.
   [Melodee](https://github.com/keremimo/melodee) by keremimo and [fm1-x0x](https://github.com/charlesvestal/fm1-x0x)
   by Charles Vestal (both GPL-3.0).
 - Emulator: after [X0X](https://github.com/charlesvestal/fm1-x0x) by charlesvestal (GPL-3.0).
+- The plugin for [tuttidaw](https://tuttidaw.com) (`web/plugin/`: the headless renderer, part stems, fractional tempo,
+  the plugin page): weavejam's plugin build of JIANT FM, in the fork [weavejam/JIANT](https://github.com/weavejam/JIANT)
+  (GPL-3.0-only); not affiliated with or endorsed by M-VAVE or Hügelton Instruments.
 - Testing and CPU work on a real FM-1: **praztalfractal** ([GitHub: gospodindilly-ops](https://github.com/gospodindilly-ops)):
   the load measurements behind the dual core work, the guard on the effects (0.6.76) and the hot code in RAM (0.6.78).
 - **[Skiff](https://github.com/illuminus5/skiff)** by illuminus5 (GPL-3.0-only), 0.9.12: the designs of two features,
