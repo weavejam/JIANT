@@ -121,4 +121,6 @@ jobs:
           t ui -o "$OUT/ui_test" tests/ui_test.c && "$OUT/ui_test"
           t hush -O2 -o "$OUT/hush_test" tests/hush_test.c
           t hush_ref -O2 -DFX_HUSH_OFF -o "$OUT/hush_ref" tests/hush_test.c
-          grep -n "hush_cmp" -A6 tests/run_tests.sh | head -8
+          a=$("$OUT/hush_test"); b=$("$OUT/hush_ref"); echo "$a"   # (run_tests.sh hush_cmp: bit for bit as without it)
+          [ "$(echo "$a" | head -1)" = "$(echo "$b" | head -1)" ]
+          [ "$(echo "$a" | sed -n 's/^hush: \([0-9]*\) blocks.*/\1/p')" -gt 50000 ]
