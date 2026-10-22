@@ -131,6 +131,9 @@ static void chain_start(void)                         /* (seq_start) */
     chain.carry = 0;
     chain.bar_pos = 0;
     chain.armed_bar = 0;
+#if JIANT_TUTTI
+    tutti_chain_frac = 0;
+#endif
     if (!chain.armed)
         return;
     chain.armed = 0;
@@ -161,10 +164,18 @@ static void chain_tick(uint32_t n)
     if (!song.playing)
         return;
     bar = chain_bar();
+#if JIANT_TUTTI
+    if (tutti_steps())                                /* hosted: the exact bar (core.h tutti_span) */
+        bar = tutti_span(tutti_beat_q32 * 4u, &tutti_chain_frac, 0);
+#endif
     chain.bar_pos += n;
     if (!bar || chain.bar_pos < bar)
         return;
     chain.bar_pos -= bar;                             /* (a bar is longer than a block) */
+#if JIANT_TUTTI
+    if (tutti_steps())
+        tutti_span(tutti_beat_q32 * 4u, &tutti_chain_frac, 1);
+#endif
     chain.carry = chain.bar_pos;
     srec_bar();
     if (chain.running) {

@@ -1248,6 +1248,9 @@ static void seq_start(void)
     lv.act = 0;                                    /* (0.9.11) LIVE: the ghosts from step 0 too (live_q) */
     song.tick = 0;
     beat_pos = 0; beat_n = 0;                      /* the ARP LED's beat from the top too */
+#if JIANT_TUTTI
+    tutti_beat_frac = 0;
+#endif
     bar_n = 0;
     clk_pos = CLK_START;                           /* the metronome's first beat with step 0 */
     song.playing = 1;
@@ -2141,12 +2144,23 @@ static void seq_tick(track_t *t, uint32_t n)
     t->seq_pos += n;
     for (;;) {
         uint32_t cur_len = step_samples(t, period, t->seq_idx) + t->ext, start, e = seq_early(t, period, len);
+#if JIANT_TUTTI
+        uint32_t *fr = &tutti_seq_frac[trk_index(t) % NTRK];
+        if (tutti_steps())                              /* hosted: the exact step lengths (core.h tutti_len) */
+            cur_len = tutti_len(t, tutti_div_q32((uint32_t)t->p[P_SDIV]), t->seq_idx, fr, 0) + t->ext;
+#endif
         if (e >= cur_len) e = cur_len - 1u;             /* (0.6.88) TIMING: the next step early, this one shorter */
         if (t->seq_pos < cur_len - e && t->seq_pos != 0x7FFFFFFFu + n)
             break;
         start = t->seq_pos >= 0x7FFFFFFFu;
         t->seq_pos = start ? chain.carry : t->seq_pos - (cur_len - e);   /* (a start: 0; a section in: its carry) */
         t->ext = (uint16_t)(start ? 0u : e);            /* (the next one longer by as much: the grid kept) */
+#if JIANT_TUTTI
+        if (start)
+            *fr = tutti_chain_frac;                     /* (a start, a section in: the bar line's fraction) */
+        else if (tutti_steps())
+            tutti_len(t, tutti_div_q32((uint32_t)t->p[P_SDIV]), t->seq_idx, fr, 1);
+#endif
         if (t->jump_to && !start) {                     /* (0.6.42) JUMP: the step it names */
             t->seq_idx = (uint16_t)((t->jump_to - 1u) % (len ? len : 1u));
             t->rev = 0;
@@ -2260,15 +2274,28 @@ static __attribute__((noinline)) void cin_record(void)
 static void click_tick(uint32_t adv)
 {
     uint32_t p = div_samples(2), beat = 0;
+#if JIANT_TUTTI
+    if (tutti_steps())                              /* hosted: the exact 1/16 (core.h tutti_span) */
+        p = tutti_span(tutti_div_q32(2), &tutti_clk_frac, 0);
+#endif
     if (clk_pos == CLK_START) {
         clk_pos = 0;
         clk_step = 0;
         clk_n = 0;
         beat = 2;
+#if JIANT_TUTTI
+        tutti_clk_frac = 0;
+#endif
     } else {
         clk_pos += adv;
         while (clk_pos >= p) {                      /* (as seq_tick: the remainder kept) */
             clk_pos -= p;
+#if JIANT_TUTTI
+            if (tutti_steps()) {
+                tutti_span(tutti_div_q32(2), &tutti_clk_frac, 1);
+                p = tutti_span(tutti_div_q32(2), &tutti_clk_frac, 0);
+            }
+#endif
             clk_step = (clk_step + 1u) & 15u;
             clk_n++;
             if (!(clk_step & 3u))
@@ -2290,6 +2317,20 @@ static int32_t click_beat_now(void)
     return clk_pos == CLK_START ? 0 : (int32_t)(clk_step >> 2);
 }
 
+#if JIANT_TUTTI
+/* hosted: the beat (events_block) of exactly b samples, its fraction moved on when it ends */
+static void tutti_beat(uint32_t b)
+{
+    if (beat_pos < b)
+        return;
+    beat_pos -= b;
+    beat_pos = beat_pos < b ? beat_pos : 0u;
+    tutti_span(tutti_beat_q32, &tutti_beat_frac, 1);
+    beat_n = (beat_n + 1u) & 3u;
+    if (!beat_n && song.playing)
+        bar_n++;
+}
+#endif
 /* everything that happens between two rendered blocks */
 static void events_block(uint32_t n)
 {
@@ -2431,6 +2472,11 @@ static void events_block(uint32_t n)
     for (i = 0; i < NPART; i++)
         arp_step(&trk[i], clock_mode ? seq_n : n, clock_mode && song.playing ? seq_n : n);
     beat_pos += clock_mode ? seq_n : n;               /* the beat the ARP LED flashes on (ui_leds) */
+#if JIANT_TUTTI
+    if (tutti_steps())                                /* hosted: the exact beat (core.h tutti_span) */
+        tutti_beat(tutti_span(tutti_beat_q32, &tutti_beat_frac, 0));
+    else
+#endif
     if (beat_pos >= beat_samples()) {
         beat_pos -= beat_samples();
         beat_pos = beat_pos < beat_samples() ? beat_pos : 0u;

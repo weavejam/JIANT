@@ -69,6 +69,9 @@ static __attribute__((noinline)) void prf_half(uint32_t all, uint32_t nested, ui
     prf_seq++;
 }
 
+#if JIANT_TUTTI
+static void tutti_block_begin(void);                    /* (web/plugin/jiant_plugin.c) */
+#endif
 static void audio_block(int32_t *out, uint32_t n)       /* mix (fx.c), then Q15 -> 24 bit */
 {
     uint32_t i, t0 = PRF_T(), t1;
@@ -79,6 +82,9 @@ static void audio_block(int32_t *out, uint32_t n)       /* mix (fx.c), then Q15 
         uin_on = 0;
 #endif
     t1 = PRF_T();
+#if JIANT_TUTTI
+    tutti_block_begin();                                /* hosted (web/plugin): the host's MIDI, its transport, by the block */
+#endif
     mix_block(out, n);
     t0 += PRF_T() - t1;                                 /* (0.9.14) PROFILE: USB and the output, the mix left out */
 #if FELUCCA_UAC
