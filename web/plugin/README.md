@@ -139,7 +139,13 @@ emulator preprocess to the same code as without it (checked with `emcc -E` on `f
   moved that way, it still comes before the next note of the same pitch on the same channel, never cutting it. A
   channel whose sustain pedal (CC64) is down at `toBeat` gets CC64 0 there, after the offs (a pedal-up later is not in
   the range): its notes are let go at `toBeat` as without the pedal, their release and the effects ring out in the tail
-  (no sound-off).
+  (no sound-off). A note lasts as the host says, whatever latches in the state: ARP 2's HOLD plays as OFF (each off
+  takes its note out of the arp), and with `toBeat`'s block, after its offs, what is still held or latched is let go
+  (the arp's notes, its sounding note ended as an off ends it): a runtime override (`tutti_input`, core.h
+  `tutti_unlatch`), HOLD itself stays as it was in the state, the live preview and the emulator latch as always. KBD
+  HOLD (LATCH, ARP OFF) holds the keys' notes only, never MIDI's; the kit's octave ratchets end with their note's off;
+  FX LATCH latches what the keys turn on (runtime, not in the state); ARP TRNS moves the sequence, which does not run
+  (`plugin_test.mjs`: with HOLD ON, ARP UP or OFF, a render is HOLD OFF's bit for bit).
 
 ## Sample rates
 

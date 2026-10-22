@@ -177,6 +177,17 @@ EXPORT void tutti_start(uint32_t stop)
     tt_stop = stop;
 }
 
+/* use B (the host's MIDI, the sequencer never started): the host's notes last as it says, whatever latches in the state
+ * (core.h tutti_unlatch: ARP 2's HOLD as OFF, the setting unchanged), and with the block nearest to frame `stop`
+ * (toBeat: the offs and CC64 0 there) what is still held or latched is let go (seq.c tutti_unhold), the tail only
+ * rings out. The live page never calls it */
+static uint32_t tt_unhold = ~0u;
+EXPORT void tutti_input(uint32_t stop)
+{
+    tutti_unlatch = 1;
+    tt_unhold = stop;
+}
+
 /* audio.c audio_block, before each block's mix: the host's MIDI due, the transport */
 static void tutti_block_begin(void)
 {
@@ -202,6 +213,10 @@ static void tutti_block_begin(void)
     if (tt_stop != ~0u && f0 + CTL / 2u > tt_stop) {
         transport_req = 2;                            /* (seq.c events_block: seq_stop, before the steps) */
         tt_stop = ~0u;
+    }
+    if (tt_unhold != ~0u && f0 + CTL / 2u > tt_unhold) {
+        tutti_let_go = 1;                             /* (seq.c events_block: after this block's MIDI, its offs) */
+        tt_unhold = ~0u;
     }
 }
 
@@ -558,6 +573,22 @@ EXPORT void tutti_test_clear(uint32_t t)
 {
     memset(trk[t % NTRK].step, 0, sizeof trk[0].step);
     ui.force = 1;
+}
+/* .. track t's ARP MODE (0 OFF, 1 UP, ..) and ARP 2's HOLD (0 / 1) set (each < 0: left as it is); -> mode | hold << 8 */
+EXPORT uint32_t tutti_test_arp(uint32_t t, int32_t mode, int32_t hold)
+{
+    track_t *k = &trk[t % NTRK];
+    if (mode >= 0)
+        k->p[P_AMODE] = (int16_t)mode;
+    if (hold >= 0)
+        k->p[P_AHOLD] = (int16_t)(hold != 0);
+    return (uint32_t)k->p[P_AMODE] | (uint32_t)k->p[P_AHOLD] << 8;
+}
+/* .. the arp's held notes and keys down on track t (seq.c arp_add: nheld | arp_phys << 8), its sounding note << 16 */
+EXPORT uint32_t tutti_test_held(uint32_t t)
+{
+    const track_t *k = &trk[t % NTRK];
+    return (uint32_t)k->nheld | (uint32_t)(k->arp_phys & 0xFFu) << 8 | (uint32_t)k->arp_note << 16;
 }
 /* .. MENU > TRACKS 6 (all six tracks play; the setting, written with the next snapshot) */
 EXPORT void tutti_test_six(void)

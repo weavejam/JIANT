@@ -342,7 +342,7 @@ static uint32_t chord_gap(const track_t *t) { return (uint32_t)clamp(t->p[P_CSTR
 static void arp_add(track_t *t, uint32_t note)
 {
     uint32_t i;
-    if (t->p[P_AHOLD] && t->arp_phys == 0u)
+    if (ARP_HOLD(t) && t->arp_phys == 0u)
         t->nheld = 0;                               /* new chord replaces the latched one */
     t->arp_phys++;                                  /* every key-down: arp_remove counts every key-up */
     for (i = 0; i < t->nheld; i++)
@@ -361,7 +361,7 @@ static void arp_remove(track_t *t, uint32_t note)
     uint32_t i, k = 0;
     if (t->arp_phys)
         t->arp_phys--;
-    if (t->p[P_AHOLD])
+    if (ARP_HOLD(t))
         return;
     for (i = 0; i < t->nheld; i++)
         if (t->held[i] != note)
@@ -1033,6 +1033,24 @@ static void latch_drop(track_t *t)
     if (t->arp_note)
         arp_silence(t);
 }
+#if JIANT_TUTTI
+/* hosted, a render of the host's MIDI at toBeat (core.h tutti_let_go, after that block's offs): nothing latched plays on
+ * into the tail: a LATCH's notes, the arp's note list, the sounding arp note ended as a note-off ends it (their release
+ * and the effects ring out; no sound-off) */
+static void tutti_unhold(void)
+{
+    uint32_t i;
+    for (i = 0; i < NTRK; i++) {
+        track_t *t = &trk[i];
+        if (key_latch(t))
+            latch_release(t);
+        t->nheld = 0;
+        t->arp_phys = 0;
+        if (t->arp_note)
+            arp_silence(t);
+    }
+}
+#endif
 
 /* key k plays kb_note[k] on track t. A note another key holds already sounds: it is not started again (nor sent
  * to MIDI OUT); the key keeps its note */
@@ -2447,6 +2465,12 @@ static void events_block(uint32_t n)
         } else
             midi_event(st, ch, d1, d2);
     }
+#if JIANT_TUTTI
+    if (tutti_let_go) {
+        tutti_let_go = 0;
+        tutti_unhold();
+    }
+#endif
     if (clock_mode) {
         seq_n = 0;
         if (song.playing) {

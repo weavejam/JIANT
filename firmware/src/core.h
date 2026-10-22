@@ -742,6 +742,11 @@ static int16_t tutti_bpm_shown;  /* the host's tempo rounded, for the screen (G_
 static uint8_t tutti_hosted;     /* hosted (jiant_plugin.c tutti_boot): the host's clock, the internal one at its tempo,
                                   * whatever MENU CLOCK says; the setting (in the state) stays the user's */
 #define CLOCK_EXT (tutti_hosted ? 0 : song.g[G_CLOCK])   /* the transport follows an external clock (USB, TRS) */
+static uint8_t tutti_unlatch;    /* a render of the host's MIDI (use B, jiant_plugin.c tutti_input): its notes last as the
+                                  * host says, ARP 2's HOLD as OFF (seq.c arp_add / arp_remove); the setting (in the
+                                  * state) stays the user's */
+static volatile uint8_t tutti_let_go;   /* .. at toBeat: what is still held or latched let go (seq.c tutti_unhold) */
+#define ARP_HOLD(t) (tutti_unlatch ? 0 : (t)->p[P_AHOLD])   /* ARP 2's HOLD keeps the arp's notes when let go */
 /* hosted: a span of exactly len samples (Q32) as whole samples, from a clock's fraction *frac (Q32), which moves on to
  * the next span's start when `next`: the spans add up to the exact time, so the clock never drifts from the host's
  * grid (seq.c seq_tick, click_tick, the beat; song_play.c's bar) */
@@ -761,6 +766,7 @@ static uint32_t tutti_len(const track_t *t, uint64_t base, uint32_t idx, uint32_
 #else
 #define HEAD_BPM song.g[G_BPM]
 #define CLOCK_EXT song.g[G_CLOCK]
+#define ARP_HOLD(t) t->p[P_AHOLD]
 #endif
 
 /* ----------------------------------------------------------- system --- */

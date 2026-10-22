@@ -370,6 +370,56 @@ if (!FAST) {
   check(`pedal over toBeat: the tail is the note's release as without the pedal, bit for bit (peak ${peak(b[0]).toFixed(3)})`,
         peak(b[0]) > 1e-3 && same(a[0], b[0]) && same(a[1], b[1]));
 }
+{ // use B with a latch in the state: ARP 2's HOLD ON with an ARP mode (the arp keeps its notes when let go), or with ARP
+  // OFF (KBD HOLD / LATCH: the keys' notes, not MIDI's): the host's notes last as it says (jiant_plugin.c tutti_input,
+  // HOLD as OFF, the setting kept), what is held is let go at toBeat; after a note's off and after toBeat the sound
+  // only decays: the render is the one with HOLD OFF, bit for bit
+  const at = (b) => Math.round(b * 0.5 * 44100);         // (120 BPM)
+  const input = { ...noInput(), notes: [{ beat: 1, lengthBeats: 1, pitch: 60, velocity: 100, channel: 0 },     // ends before toBeat
+                                        { beat: 2.5, lengthBeats: 10, pitch: 64, velocity: 100, channel: 0 }] }; // over it
+  const r = req({ input, toBeat: 4, tailMs: 2000, outputs: ["mix", "t1"] });
+  const W = 441;                                          // 10 ms windows: an onset is a window over 1.5 x the last
+  const onsets = (x, from, to) => {
+    let n = 0, last = Infinity;
+    for (let i = from; i + W <= to; i += W) { const e = rms(x.subarray(i, i + W)); if (e > 1.5 * last + 1e-5) n++; last = e; }
+    return n;
+  };
+  const hold = (ex) => ex.tutti_test_arp(0, -1, -1) >> 8;
+  for (const [mode, what] of [[1, "ARP UP + HOLD"], [0, "KBD HOLD (ARP OFF + HOLD)"]]) {
+    const on = await makeState((ex) => ex.tutti_test_arp(0, mode, 1)), off = await makeState((ex) => ex.tutti_test_arp(0, mode, 0));
+    const a = (await renderAll(on, r)).out, b = (await renderAll(off, r)).out, x = a.mix[0];
+    const quiet = [onsets(x, at(2) + 2205, at(2.5) - W), onsets(x, at(4) + 2205, x.length)];   // (50 ms after each off)
+    check(`use B, ${what} in the state: the render is HOLD OFF's bit for bit (peak ${peak(x).toFixed(3)}), no onset after the offs (${quiet.join(" ")})`,
+          peak(x) > 1e-2 && same(a.mix[0], b.mix[0]) && same(a.mix[1], b.mix[1]) && same(a.t1[0], b.t1[0]) &&
+          quiet[0] === 0 && quiet[1] === 0 && peak(x.subarray(x.length - 4410)) < peak(x) / 4);
+    // the device: the arp's list after each off, at toBeat everything let go; HOLD stays ON (and in its state)
+    const probe = async (unlatch, keep = () => true) => {
+      const ex = await device(mod, on, 120), plan = planRender(r);
+      if (unlatch) ex.tutti_input(plan.stop);
+      for (const e of plan.events.filter(keep)) ex.tutti_event(e.frame, e.status, e.d1, e.d2);
+      let made = 0;
+      const upto = (f) => { while (made < f) made += ex.tutti_render(32, 0); return ex.tutti_test_held(0); };
+      return { ex, after: upto(at(2) + 4096), mid: upto(at(3)), end: upto(at(4) + 4096) };
+    };
+    const p = await probe(true), q = await probe(false);
+    if (mode) {  // a note whose off never comes (not from the renderer: what toBeat's let-go is for) is let go there too
+      const s = await probe(true, (e) => !(e.status === 0x80 && e.d1 === 64));
+      check(`use B, ${what}: a note with no off is held (${(s.mid & 0xFF)}) until toBeat, let go there (${s.end.toString(16)})`,
+            (s.mid & 0xFF) === 1 && s.end === 0);
+    }
+    p.ex.tutti_snapshot();
+    const { exports: back } = await WebAssembly.instantiate(mod, {});
+    back._initialize(); back.web_nor_erase();
+    restoreInto(back, storeSectors(new Uint8Array(p.ex.memory.buffer, p.ex.web_nor(), p.ex.web_nor_size())));
+    back.tutti_boot(0);
+    const hex = (v) => v.toString(16);
+    check(`use B, ${what}: no note held after its off (${hex(p.after)}), none at toBeat (${hex(p.end)}); HOLD stays ON, in the state too`,
+          p.after === 0 && p.end === 0 && hold(p.ex) === 1 && hold(back) === 1);
+    if (mode)   // (no override: the live device, the emulator: HOLD keeps the note, the arp plays on)
+      check(`.. without the override HOLD keeps the arp's note after its off (${hex(q.after)}) and at toBeat (${hex(q.end)})`,
+            (q.after & 0xFF) === 1 && (q.end & 0xFF) === 1);
+  }
+}
 { // the host's tempo is a runtime value: not the song's G_BPM, not in the autosave's signature (the state)
   const { exports: ex } = await WebAssembly.instantiate(mod, {});
   ex._initialize(); ex.web_nor_erase(); ex.tutti_boot(0);
