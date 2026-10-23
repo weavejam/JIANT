@@ -59,7 +59,7 @@ const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">"
 
 // ---- the plugin
 copy(wasmPath, "plugin/felucca.wasm");
-for (const f of ["tutti.js", "panel.js", "protocol.js", "engine.js", "renderer.js", "resample.js", "state.js", "render-worker.js", "worklet-tutti.js"])
+for (const f of ["tutti.js", "panel.js", "protocol.js", "fm1-panel.js", "engine.js", "renderer.js", "resample.js", "state.js", "render-worker.js", "worklet-tutti.js"])
   copy(src("web/plugin", f), `plugin/${f}`);
 copy(src("web/emu/worklet.js"), "emu/worklet.js");
 copy(src("web/emu/fonts/DotGothic16-subset.woff"), "plugin/fonts/DotGothic16-subset.woff");
@@ -182,6 +182,7 @@ const manifest = {
     tempoMap: "constant",
     sampleRates: SAMPLE_RATES,
     seek: false,                                       // every render plays from beat 0 (renderer.js)
+    fm1Panel: true,                                    // a hardware FM-1 can play it (protocol 12, fm1-panel.js)
     midiChannels: [0, 1, 2, 3, 4, 5].map((channel) => ({ channel, name: `T${channel + 1}` })),   // (MIDI IN, ROUTE CH)
   },
 };
