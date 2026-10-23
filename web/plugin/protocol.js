@@ -43,8 +43,9 @@ const isNum = (x) => typeof x === "number" && Number.isFinite(x);
 export class PluginSession {
   // post(message): to window.parent, target '*' (the hello only); allow(origin): an embedder (embedderAllowed with the
   // build's list); log(...): a console
-  constructor({ engine, post, plugin, allow = embedderAllowed, log = () => {}, now = () => Date.now() }) {
+  constructor({ engine, post, plugin, allow = embedderAllowed, log = () => {}, now = () => Date.now(), panel = null }) {
     this.engine = engine;
+    this.panel = panel;                               // a hardware FM-1 (fm1-panel.js PanelBridge; protocol 12), or none
     this.postParent = post;
     this.plugin = plugin;                             // { id, version, build }
     this.allow = allow;
@@ -138,6 +139,14 @@ export class PluginSession {
           if (r && r.renderId === m.renderId) { r.cancel = true; r.wake(); }
           return;
         }
+        case "panel-attach":                         // (protocol 12: the host's FM-1 is this panel now / no longer)
+          if (typeof m.attached !== "boolean") return this.log("tutti: dropped panel-attach");
+          if (this.panel) this.panel.attach(m.attached);
+          return;
+        case "panel":
+          if (!Array.isArray(m.events)) return this.log("tutti: dropped panel");
+          if (this.panel) this.panel.events(m.events);
+          return;
         case "close": return this.close();
         default: this.log("tutti: unknown message", m.type);
       }
@@ -263,6 +272,7 @@ export class PluginSession {
   // work for it), the port's handlers off and the port let go, so a new connect starts another session
   close() {
     if (this.state === "closed") return;
+    if (this.panel) this.panel.attach(false);          // (the hardware lets go with the session)
     if (this.render) { this.render.cancel = true; this.render.wake(); }
     clearTimeout(this.stTimer);
     this.stTimer = null;

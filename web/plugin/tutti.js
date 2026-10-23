@@ -10,6 +10,7 @@
 //   Either way the page fills the frame at any size, the device scaled to fit, with the parts panel beside it in a wide
 //   frame (panel.js).
 import { PluginSession, embedderAllowed } from "./protocol.js";
+import { PanelBridge } from "./fm1-panel.js";
 import { JiantEngine, PreviewTempo } from "./engine.js";
 import { RenderError } from "./renderer.js";
 import { BUILD, EMBEDDERS } from "./build-info.js";
@@ -132,9 +133,11 @@ const live = {
       liveOn = true;
       tempo.reset();
       tempo.at(0);
+      panel.node(n);                                   // (a hardware FM-1 through tuttidaw: fm1-panel.js)
       const frames = n.port.onmessage;
       n.port.onmessage = (e) => {
         const m = e.data;
+        panel.frame(m);                                // (the screen and LEDs, read only: they go on as they went)
         if (m.type === "tutti-sig") {
           if (sigBase !== null && m.sig !== sigBase) engine.changed();
           sigBase = m.sig;
@@ -248,8 +251,11 @@ const engine = new JiantEngine({
   live,
   onChanged: (rev) => session.stateChanged(rev),
 });
+// a hardware FM-1 the host hands this panel while its window has the focus (protocol 12)
+const panel = new PanelBridge((m, transfer) => session.send(m, transfer));
 const session = new PluginSession({
   engine,
+  panel,
   post: (m) => window.parent.postMessage(m, "*"),
   allow: (origin) => embedderAllowed(origin, EMBEDDERS),   // (the build's channel: site.mjs PLUGIN_CHANNEL)
   plugin: { id: BUILD.id, version: BUILD.version, build: BUILD.build },
