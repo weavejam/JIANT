@@ -83,8 +83,21 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
 
-      # Deployment (by the lead for now), only from a push to main: the production site at
-      # https://jiant.plugins.tooljams.com, the preview at https://jiant-preview.plugins.tooljams.com.
+      # the sites on vm-tuttidaw-sg's Caddy (weavejam/tuttidaw deploy/plugins; Cloudflare Workers did not load from
+      # mainland China): https://jiant.plugins.tooljams.com and https://jiant-preview.plugins.tooljams.com, both from
+      # main, the preview from a pull request of this repo. The key runs only receive.sh on the VM.
+      - name: Deploy the sites
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          KEY: ${{ secrets.PLUGIN_DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ vars.PLUGIN_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/plugin_deploy && chmod 600 ~/.ssh/plugin_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          up() { tar -C "$1" -czf - . | ssh -i ~/.ssh/plugin_deploy -o IdentitiesOnly=yes lubo@4.145.89.54 "$2"; }
+          if [ "$GITHUB_EVENT_NAME" = push ]; then up build/plugin-site jiant.plugins.tooljams.com; fi
+          up build/plugin-site-preview jiant-preview.plugins.tooljams.com
 
   host-tests:
     runs-on: ubuntu-24.04
