@@ -86,6 +86,8 @@ class JiantTutti extends Base {
       this.sentDraws = -1;
       this.sentLeds = "";
       this.queue = [];
+      this.page = { buttons: 0, keys: 0 };              // (web/emu/worklet.js: the page's and the hardware's presses)
+      this.hw = { buttons: 0, keys: 0 };
       this.play = this.at = this.seeking = null;
       this.sentSig = null;
       this.port.postMessage({ type: "ready", rate: ex.web_sample_rate() });
