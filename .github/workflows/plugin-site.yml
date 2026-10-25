@@ -127,3 +127,19 @@ jobs:
           a=$("$OUT/hush_test"); b=$("$OUT/hush_ref"); echo "$a"   # (run_tests.sh hush_cmp: bit for bit as without it)
           [ "$(echo "$a" | head -1)" = "$(echo "$b" | head -1)" ]
           [ "$(echo "$a" | sed -n 's/^hush: \([0-9]*\) blocks.*/\1/p')" -gt 50000 ]
+
+      # the sites on vm-tuttidaw-sg's Caddy (weavejam/tuttidaw deploy/plugins; Cloudflare Workers did not load from
+      # mainland China): production and preview from main, preview from a pull request of this repo. The key runs
+      # only receive.sh on the VM.
+      - name: Deploy the sites
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          KEY: ${{ secrets.PLUGIN_DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ vars.PLUGIN_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/plugin_deploy && chmod 600 ~/.ssh/plugin_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          up() { tar -C "$1" -czf - . | ssh -i ~/.ssh/plugin_deploy -o IdentitiesOnly=yes lubo@4.145.89.54 "$2"; }
+          if [ "$GITHUB_EVENT_NAME" = push ]; then up build/plugin-site jiant.plugins.tooljams.com; fi
+          up build/plugin-site-preview jiant-preview.plugins.tooljams.com
